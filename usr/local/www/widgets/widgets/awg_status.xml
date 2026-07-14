@@ -1,0 +1,7 @@
+<!-- widgets/widgets/awg_status.xml -->
+<widgetconfig>
+    <name>AmneziaWG Status</name>
+    <title>AmneziaWG</title>
+    <include_file>widgets/widgets/awg_status.widget.php</include_file>
+    <category>VPN</category>
+</widgetconfig>
