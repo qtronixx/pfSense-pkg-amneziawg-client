@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    awg.xml
+    ------------------------------------------------------------------
+    Дескриптор пакета AmneziaWG Client для pfSense 2.8.1 (legacy pkg
+    framework). Определяет пункт меню VPN -> AmneziaWG, вкладки формы
+    редактирования и регистрацию службы "awg" в Status -> Services.
+
+    ОГРАНИЧЕНИЕ ПО ТЗ (п.1): в тегах <tab> ниже сознательно ОТСУТСТВУЮТ
+    какие-либо разделы вида "Server", "Listen Peers", "Client
+    Generator" и т.п., присутствующие в полноценных WireGuard/AmneziaWG
+    UI. Оставлены только: список туннелей и форма клиента.
+    ------------------------------------------------------------------
+-->
+<packagegui>
+    <copyright>
+        Copyright (C) 2026, AmneziaWG Client for pfSense 2.8.1
+        client-only build. Licensed under Apache 2.0 (naследует
+        лицензию upstream AmneziaWG/WireGuard tools).
+    </copyright>
+
+    <name>awg</name>
+    <version>1.0.0</version>
+    <title>VPN: AmneziaWG Client</title>
+    <include_file>/usr/local/pkg/awg.inc</include_file>
+
+    <menu>
+        <name>AmneziaWG</name>
+        <tooltiptext>Настройка клиентских туннелей AmneziaWG</tooltiptext>
+        <section>VPN</section>
+        <url>/vpn_awg_tunnels.php</url>
+    </menu>
+
+    <!--
+        Регистрация службы для отображения в Status -> Services
+        и управления через стандартный API pfSense (start/stop/restart).
+    -->
+    <service>
+        <name>awg</name>
+        <rcfile>awg.sh</rcfile>
+        <executable>awg</executable>
+        <description>Служба клиента AmneziaWG (обфусцированный WireGuard-туннель)</description>
+    </service>
+
+    <!--
+        Секция, в которую пакет пишет данные в config.xml.
+        Соответствует путям, используемым в awg_get_tunnels() /
+        awg_save_tunnels() из awg.inc (AWG_XML_ROOT/AWG_XML_SECTION).
+    -->
+    <configpath>installedpackages/awgclient</configpath>
+
+    <tabs>
+        <tab>
+            <text>Туннели</text>
+            <url>/vpn_awg_tunnels.php</url>
+            <active/>
+        </tab>
+        <tab>
+            <text>Добавить/редактировать</text>
+            <url>/vpn_awg_edit.php</url>
+        </tab>
+        <tab>
+            <text>Статус</text>
+            <url>/vpn_awg_status.php</url>
+        </tab>
+    </tabs>
+
+    <!--
+        Хуки жизненного цикла пакета. custom_php_install_command и
+        custom_php_deinstall_command вызываются Package Manager'ом
+        при установке/удалении - здесь дергаем функции из awg.inc.
+    -->
+    <custom_php_install_command>awg_install_hook</custom_php_install_command>
+    <custom_php_deinstall_command>awg_deinstall_hook</custom_php_deinstall_command>
+    <custom_php_resync_config_command>awg_sync_all</custom_php_resync_config_command>
+
+</packagegui>
