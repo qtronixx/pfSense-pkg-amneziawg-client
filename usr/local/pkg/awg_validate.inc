@@ -41,6 +41,15 @@ function awg_validate_tunnel_form(array $pconfig): array
     if (!empty($pconfig['listenport']) && !is_port((string)$pconfig['listenport'])) {
         $input_errors[] = 'ListenPort должен быть корректным номером порта (1-65535).';
     }
+    
+    if (!empty($pconfig['dns'])) {
+        foreach (explode(',', (string)$pconfig['dns']) as $srv) {
+            $srv = trim($srv);
+            if ($srv !== '' && !is_ipaddr($srv)) {
+                $input_errors[] = "DNS-сервер '{$srv}' указан в неверном формате.";
+            }
+        }
+    }
 
     // Пиры - обязателен минимум 1 внешний сервер (клиентское ограничение).
     $peers = $pconfig['peer'] ?? [];
