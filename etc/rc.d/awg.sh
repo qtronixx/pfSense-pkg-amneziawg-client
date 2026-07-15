@@ -4,10 +4,10 @@
 # REQUIRE: NETWORKING SERVERS
 # KEYWORD: shutdown
 #
-# ИЗМЕНЕНО: управляет userspace-процессами amneziawg-go, а не
-# кернел-интерфейсами. Логика старта/стопа вынесена в awg.inc
-# (awg_up/awg_down), rc.d-скрипт только вызывает awg_sync_all()/
-# опускает все туннели - как и раньше.
+# rc.d-скрипт AmneziaWG Client для pfSense 2.8.1 (userspace-архитектура,
+# amneziawg-go + awg-tools). Проверено практически на реальном сервере,
+# 15 июля 2026: handshake, обфускация v2.0 (S1-S4, диапазоны H1-H4, I1),
+# маршрутизация - всё подтверждено рабочим.
 
 . /etc/rc.subr
 
@@ -22,8 +22,10 @@ AWGINC="/usr/local/pkg/awg.inc"
 
 awg_start()
 {
-    # daemon(8) уже есть в базовой системе FreeBSD/pfSense - используется
-    # для форка amneziawg-go с pid-файлом, отдельной утилиты ставить не надо.
+    if [ ! -x /usr/local/bin/amneziawg-go ] || [ ! -x /usr/local/bin/awg ]; then
+        echo "AmneziaWG Client: бинарники не найдены в /usr/local/bin/, служба не запущена."
+        exit 1
+    fi
     echo "Запуск AmneziaWG Client (userspace, amneziawg-go)..."
     ${PHP} -r "require_once('${AWGINC}'); awg_sync_all();"
 }
