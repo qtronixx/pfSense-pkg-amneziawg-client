@@ -21,8 +21,14 @@ require_once('/usr/local/pkg/awg.inc');
 $pgtitle = [gettext('VPN'), gettext('AmneziaWG'), gettext('Статус')];
 
 /*
- * Выполняет `awg show all dump` и разбирает вывод в структуру
- * ['awg0' => ['interface' => [...], 'peers' => [[...], ...]], ...]
+ * Выполняет `awg show all dump` и разбирает вывод.
+ *
+ * ИСПРАВЛЕНО (подтверждено реальным выводом 15.07.2026): формат dump
+ * для AmneziaWG отличается от ванильного WireGuard - у строки
+ * интерфейса 21 поле (privkey, pubkey, listenport, jc, jmin, jmax,
+ * s1-s4, h1-h4, i1-i5, advanced-security-flag), поля fwmark НЕТ
+ * ВООБЩЕ (в отличие от wg, где оно есть). Строка peer - ровно 9 полей.
+ * Различаем по точному количеству колонок, а не диапазону "больше/меньше".
  */
 function awg_get_status(): array
 {
@@ -39,15 +45,14 @@ function awg_get_status(): array
         if (!isset($result[$ifname])) {
             $result[$ifname] = ['interface' => [], 'peers' => []];
         }
-        // Строка интерфейса содержит 5 колонок, строка peer - 9
-        if (count($cols) === 5) {
-            $result[$ifname]['interface'] = [
-                'privkey'     => $cols[1],
-                'pubkey'      => $cols[2],
-                'listenport'  => $cols[3],
-                'fwmark'      => $cols[4],
-            ];
-        } elseif (count($cols) >= 8) {
+
+        // Заменяем строковый "(null)" (буквально выводится awg для
+        // незаполненных I2-I5) на пустую строку - иначе на экране
+        // будет мусорный текст "(null)" вместо прочерка.
+        $nn = fn(string $v): string => ($v === '(null)') ? '' : $v;
+
+        if (count($cols) === 9) {
+            // --- Peer ---
             $result[$ifname]['peers'][] = [
                 'pubkey'      => $cols[1],
                 'psk'         => $cols[2],
@@ -58,11 +63,37 @@ function awg_get_status(): array
                 'tx'          => (int)$cols[7],
                 'keepalive'   => $cols[8] ?? '',
             ];
+        } elseif (count($cols) >= 20) {
+            // --- Интерфейс (AmneziaWG-формат, полный набор обфускации) ---
+            $result[$ifname]['interface'] = [
+                'privkey'     => $cols[1]  ?? '',
+                'pubkey'      => $cols[2]  ?? '',
+                'listenport'  => $cols[3]  ?? '',
+                'jc'          => $cols[4]  ?? '',
+                'jmin'        => $cols[5]  ?? '',
+                'jmax'        => $cols[6]  ?? '',
+                's1'          => $cols[7]  ?? '',
+                's2'          => $cols[8]  ?? '',
+                's3'          => $cols[9]  ?? '',
+                's4'          => $cols[10] ?? '',
+                'h1'          => $cols[11] ?? '',
+                'h2'          => $cols[12] ?? '',
+                'h3'          => $cols[13] ?? '',
+                'h4'          => $cols[14] ?? '',
+                'i1'          => $nn($cols[15] ?? ''),
+                'i2'          => $nn($cols[16] ?? ''),
+                'i3'          => $nn($cols[17] ?? ''),
+                'i4'          => $nn($cols[18] ?? ''),
+                'i5'          => $nn($cols[19] ?? ''),
+            ];
+        } else {
+            // Неизвестный формат строки - логируем, но не падаем,
+            // чтобы будущие изменения формата dump не роняли страницу статуса.
+            log_error("AmneziaWG: неожиданный формат строки dump ({$ifname}, " . count($cols) . " полей) - пропущена.");
         }
     }
     return $result;
 }
-
 /*
  * Человекочитаемое "N секунд/минут/часов назад" для времени handshake.
  */
@@ -133,6 +164,32 @@ include('head.inc');
             <tr>
                 <th><?= gettext('Порт прослушивания') ?></th>
                 <td><?= htmlspecialchars($data['interface']['listenport'] ?? '') ?></td>
+            </tr>
+            <tr>
+                <th><?= gettext('Jc / Jmin / Jmax') ?></th>
+                <td>
+                    <?= htmlspecialchars($data['interface']['jc'] ?? '') ?> /
+                    <?= htmlspecialchars($data['interface']['jmin'] ?? '') ?> /
+                    <?= htmlspecialchars($data['interface']['jmax'] ?? '') ?>
+                </td>
+            </tr>
+            <tr>
+                <th><?= gettext('S1 / S2 / S3 / S4') ?></th>
+                <td>
+                    <?= htmlspecialchars($data['interface']['s1'] ?? '') ?> /
+                    <?= htmlspecialchars($data['interface']['s2'] ?? '') ?> /
+                    <?= htmlspecialchars($data['interface']['s3'] ?? '') ?> /
+                    <?= htmlspecialchars($data['interface']['s4'] ?? '') ?>
+                </td>
+            </tr>
+            <tr>
+                <th><?= gettext('H1-H4') ?></th>
+                <td>
+                    <?= htmlspecialchars($data['interface']['h1'] ?? '') ?>,
+                    <?= htmlspecialchars($data['interface']['h2'] ?? '') ?>,
+                    <?= htmlspecialchars($data['interface']['h3'] ?? '') ?>,
+                    <?= htmlspecialchars($data['interface']['h4'] ?? '') ?>
+                </td>
             </tr>
         </table>
 

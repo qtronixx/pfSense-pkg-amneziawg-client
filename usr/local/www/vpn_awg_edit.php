@@ -4,14 +4,12 @@
  * -----------------------------------------------------------------------
  * Форма добавления/редактирования одного клиентского туннеля AmneziaWG.
  *
- * Состоит из двух логических частей:
- *   1) [Interface] - локальные параметры + ПОЛНЫЙ набор обфускации
- *      AmneziaWG (Jc/Jmin/Jmax/S1/S2/H1-H4) - требование п.3 ТЗ.
- *   2) [Peer] x N - динамический список ВНЕШНИХ серверов. Поле
- *      Endpoint обязательно для каждого peer - это и есть техническая
- *      реализация клиентского ограничения (п.1 ТЗ): без Endpoint
- *      добавить peer через эту форму невозможно, а значит невозможно
- *      создать "серверную" конфигурацию, ожидающую входящих клиентов.
+ * ИТОГОВАЯ ВЕРСИЯ (пересобрана заново - предыдущая копия в репозитории
+ * содержала дублирующиеся блоки обфускации и утерянную таблицу Peer,
+ * из-за чего форма была нерабочей).
+ *
+ * Endpoint обязателен для каждого peer - техническая реализация
+ * клиентского ограничения: без Endpoint peer через эту форму не добавить.
  * -----------------------------------------------------------------------
  */
 
@@ -25,47 +23,11 @@ global $config;
 
 $pgtitle = [gettext('VPN'), gettext('AmneziaWG'), gettext('Редактировать')];
 
-$tunnels = awg_get_tunnels();
-$id = isset($_REQUEST['id']) ? (int)$_REQUEST['id'] : null;
-
-/* -----------------------------------------------------------------
- * Значения по умолчанию для новой записи (в т.ч. дефолтные значения
- * обфускации, рекомендуемые upstream-проектом AmneziaWG).
- * ----------------------------------------------------------------- */
-$pconfig = [
-    'name'        => awg_next_free_name(),
-    'enabled'     => '1',
-    'privkey'     => '',
-    'pubkey'      => '',
-    'address'     => '',
-    'address6'    => '',
-    'listenport'  => '',
-    'mtu'         => '1420',
-    'jc'          => '4',
-    'jmin'        => '40',
-    'jmax'        => '70',
-    's1'          => '0',
-    's2'          => '0',
-    'h1'          => (string) random_int(5, 2000000000),
-    'h2'          => (string) random_int(5, 2000000000),
-    'h3'          => (string) random_int(5, 2000000000),
-    'h4'          => (string) random_int(5, 2000000000),
-    'peer'        => [
-        ['pubkey' => '', 'presharedkey' => '', 'endpoint' => '', 'endpointport' => '51820',
-         'allowedips' => '0.0.0.0/0, ::/0', 'keepalive' => '25'],
-    ],
-];
-
-if ($id !== null && isset($tunnels[$id])) {
-    $pconfig = array_merge($pconfig, $tunnels[$id]);
-    // Нормализация одиночного peer в список (см. awg.inc)
-    if (isset($pconfig['peer']['pubkey'])) {
-        $pconfig['peer'] = [$pconfig['peer']];
-    }
-}
-
 /*
  * Подбирает следующее свободное имя интерфейса awgN.
+ * ВАЖНО: объявлена ДО первого использования - в PHP это не имеет
+ * значения (функции поднимаются на этапе разбора файла), но для
+ * читаемости кода вынесена в начало.
  */
 function awg_next_free_name(): string
 {
@@ -78,6 +40,49 @@ function awg_next_free_name(): string
     return AWG_IF_PREFIX . '0';
 }
 
+$tunnels = awg_get_tunnels();
+$id = isset($_REQUEST['id']) ? (int)$_REQUEST['id'] : null;
+
+$pconfig = [
+    'name'        => awg_next_free_name(),
+    'enabled'     => '1',
+    'descr'       => '',
+    'privkey'     => '',
+    'pubkey'      => '',
+    'address'     => '',
+    'address6'    => '',
+    'listenport'  => '',
+    'mtu'         => '1420',
+    'jc'          => '4',
+    'jmin'        => '10',
+    'jmax'        => '50',
+    's1'          => '0',
+    's2'          => '0',
+    's3'          => '0',
+    's4'          => '0',
+    'h1'          => '1',
+    'h2'          => '2',
+    'h3'          => '3',
+    'h4'          => '4',
+    'i1'          => '',
+    'i2'          => '',
+    'i3'          => '',
+    'i4'          => '',
+    'i5'          => '',
+    'dns'         => '',
+    'peer'        => [
+        ['pubkey' => '', 'presharedkey' => '', 'endpoint' => '', 'endpointport' => '51820',
+         'allowedips' => '0.0.0.0/0, ::/0', 'keepalive' => '25'],
+    ],
+];
+
+if ($id !== null && isset($tunnels[$id])) {
+    $pconfig = array_merge($pconfig, $tunnels[$id]);
+    if (isset($pconfig['peer']['pubkey'])) {
+        $pconfig['peer'] = [$pconfig['peer']];
+    }
+}
+
 $input_errors = [];
 
 /* -----------------------------------------------------------------
@@ -86,11 +91,9 @@ $input_errors = [];
 if ($_POST['save'] ?? false) {
     $pconfig = $_POST;
 
-    // Сборка массива peer'ов из плоских POST-полей peer_pubkey[], peer_endpoint[] и т.д.
     $peer_count = count($_POST['peer_pubkey'] ?? []);
     $peers = [];
     for ($i = 0; $i < $peer_count; $i++) {
-        // Пропускаем полностью пустые "дополнительные" строки формы
         if (trim((string)($_POST['peer_pubkey'][$i] ?? '')) === '') {
             continue;
         }
@@ -108,6 +111,8 @@ if ($_POST['save'] ?? false) {
     $input_errors = awg_validate_tunnel_form($pconfig);
 
     if (empty($input_errors)) {
+        // ВАЖНО: перенесены ВСЕ поля, включая s3/s4/i1-i5/dns -
+        // в предыдущей версии файла именно тут они терялись при сохранении.
         $entry = [
             'name'       => $pconfig['name'],
             'enabled'    => !empty($pconfig['enabled']) ? '1' : '',
@@ -123,10 +128,18 @@ if ($_POST['save'] ?? false) {
             'jmax'       => $pconfig['jmax'],
             's1'         => $pconfig['s1'],
             's2'         => $pconfig['s2'],
+            's3'         => $pconfig['s3'] ?? '0',
+            's4'         => $pconfig['s4'] ?? '0',
             'h1'         => $pconfig['h1'],
             'h2'         => $pconfig['h2'],
             'h3'         => $pconfig['h3'],
             'h4'         => $pconfig['h4'],
+            'i1'         => trim((string)($pconfig['i1'] ?? '')),
+            'i2'         => trim((string)($pconfig['i2'] ?? '')),
+            'i3'         => trim((string)($pconfig['i3'] ?? '')),
+            'i4'         => trim((string)($pconfig['i4'] ?? '')),
+            'i5'         => trim((string)($pconfig['i5'] ?? '')),
+            'dns'        => trim((string)($pconfig['dns'] ?? '')),
             'peer'       => $peers,
         ];
 
@@ -144,7 +157,6 @@ if ($_POST['save'] ?? false) {
     }
 }
 
-/* Обработка кнопки "Сгенерировать ключи" через AJAX-подобный POST */
 if (($_POST['genkey'] ?? false)) {
     $kp = awg_genkey();
     $pconfig['privkey'] = $kp['privkey'] ?? '';
@@ -209,14 +221,13 @@ include('head.inc');
             <div class="col-sm-6">
                 <input type="text" class="form-control" name="pubkey" readonly
                        value="<?= htmlspecialchars($pconfig['pubkey']) ?>">
-                <span class="help-block"><?= gettext('Передайте этот ключ администратору AmneziaWG-сервера, если требуется allow-list на его стороне.') ?></span>
             </div>
         </div>
 
         <div class="form-group">
             <label class="col-sm-2 control-label"><?= gettext('Адрес туннеля (IPv4/CIDR)') ?></label>
             <div class="col-sm-4">
-                <input type="text" class="form-control" name="address" placeholder="10.0.14.88/24"
+                <input type="text" class="form-control" name="address" placeholder="10.8.1.31/32"
                        value="<?= htmlspecialchars($pconfig['address'] ?? '') ?>">
             </div>
         </div>
@@ -245,38 +256,15 @@ include('head.inc');
             </div>
         </div>
 
-    </div>
-</div>
-
-<div class="panel panel-default">
-    <div class="panel-heading"><h2 class="panel-title"><?= gettext('Параметры обфускации AmneziaWG') ?></h2></div>
-    <div class="panel-body">
-        <p class="text-muted">
-            <?= gettext('Эти параметры должны ТОЧНО совпадать со значениями на стороне сервера AmneziaWG. Их можно получить из файла экспорта клиента приложения Amnezia либо запросить у администратора сервера.') ?>
-        </p>
-
-        <div class="row">
-            <?php
-            $fields = [
-                'jc'   => ['Jc',   gettext('Количество junk-пакетов перед handshake (1-128)')],
-                'jmin' => ['Jmin', gettext('Мин. размер junk-пакета, байт')],
-                'jmax' => ['Jmax', gettext('Макс. размер junk-пакета, байт')],
-                's1'   => ['S1',   gettext('Доп. байты перед init-пакетом')],
-                's2'   => ['S2',   gettext('Доп. байты перед response-пакетом')],
-                'h1'   => ['H1',   gettext('Magic header 1 (уникальное число)')],
-                'h2'   => ['H2',   gettext('Magic header 2 (уникальное число)')],
-                'h3'   => ['H3',   gettext('Magic header 3 (уникальное число)')],
-                'h4'   => ['H4',   gettext('Magic header 4 (уникальное число)')],
-            ];
-            foreach ($fields as $key => [$label, $hint]): ?>
-                <div class="col-sm-4 form-group">
-                    <label><?= $label ?></label>
-                    <input type="number" class="form-control" name="<?= $key ?>"
-                           value="<?= htmlspecialchars((string)$pconfig[$key]) ?>">
-                    <span class="help-block small"><?= $hint ?></span>
-                </div>
-            <?php endforeach; ?>
+        <div class="form-group">
+            <label class="col-sm-2 control-label"><?= gettext('DNS-серверы (через запятую)') ?></label>
+            <div class="col-sm-6">
+                <input type="text" class="form-control" name="dns" placeholder="172.29.172.254, 1.0.0.1"
+                       value="<?= htmlspecialchars((string)($pconfig['dns'] ?? '')) ?>">
+                <span class="help-block small"><?= gettext('Автоматически не применяется - настройте DNS Resolver в System -> General Setup вручную.') ?></span>
+            </div>
         </div>
+
     </div>
 </div>
 
@@ -284,9 +272,7 @@ include('head.inc');
     <div class="panel-heading"><h2 class="panel-title"><?= gettext('Параметры обфускации AmneziaWG 2.0') ?></h2></div>
     <div class="panel-body">
         <div class="alert alert-info">
-            <?= gettext('H1-H4 указываются в формате диапазона "min-max" (например, 1166006081-1768483139) ' .
-                        'либо одиночным числом для совместимости с AmneziaWG 1.5. ' .
-                        'Первое число диапазона обязано быть МЕНЬШЕ второго.') ?>
+            <?= gettext('Все значения должны ТОЧНО совпадать со значениями на сервере. H1-H4 указываются в формате диапазона "min-max" (например, 1166006081-1768483139) либо одиночным числом для совместимости с AmneziaWG 1.5. Первое число диапазона обязано быть МЕНЬШЕ второго.') ?>
         </div>
 
         <div class="row">
@@ -316,7 +302,7 @@ include('head.inc');
         </div>
 
         <div class="alert alert-info">
-            <?= gettext('I1-I5 - опциональные CPS-строки (сигнатуры пакетов). Оставьте пустым поле, если не используется - пустые значения НЕ будут записаны в конфиг (это ловит известный баг парсера awg с пустыми полями).') ?>
+            <?= gettext('I1-I5 - опциональные CPS-строки. Пустые поля НЕ записываются в конфиг.') ?>
         </div>
         <?php foreach (['i1','i2','i3','i4','i5'] as $k): ?>
             <div class="form-group">
@@ -326,15 +312,47 @@ include('head.inc');
                 </div>
             </div>
         <?php endforeach; ?>
+    </div>
+</div>
 
-        <div class="form-group">
-            <label class="col-sm-2 control-label"><?= gettext('DNS-серверы (через запятую)') ?></label>
-            <div class="col-sm-6">
-                <input type="text" class="form-control" name="dns" placeholder="172.29.172.254, 1.0.0.1"
-                       value="<?= htmlspecialchars((string)($pconfig['dns'] ?? '')) ?>">
-                <span class="help-block small"><?= gettext('Автоматически не применяется - настройте DNS Resolver в System -> General Setup вручную по подсказке в логе после Apply.') ?></span>
-            </div>
-        </div>
+<div class="panel panel-default">
+    <div class="panel-heading">
+        <h2 class="panel-title"><?= gettext('Пиры (внешние серверы AmneziaWG)') ?></h2>
+    </div>
+    <div class="panel-body">
+        <p class="text-muted">
+            <?= gettext('Каждая запись обязана указывать Endpoint - адрес внешнего сервера.') ?>
+        </p>
+
+        <table class="table" id="peer-table">
+            <thead>
+                <tr>
+                    <th><?= gettext('Публичный ключ сервера') ?></th>
+                    <th><?= gettext('Preshared key (опц.)') ?></th>
+                    <th><?= gettext('Endpoint (хост/IP)') ?></th>
+                    <th><?= gettext('Порт') ?></th>
+                    <th><?= gettext('AllowedIPs') ?></th>
+                    <th><?= gettext('Keepalive, сек') ?></th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach ($pconfig['peer'] as $p): ?>
+                <tr>
+                    <td><input type="text" class="form-control" name="peer_pubkey[]" value="<?= htmlspecialchars($p['pubkey'] ?? '') ?>"></td>
+                    <td><input type="text" class="form-control" name="peer_psk[]" value="<?= htmlspecialchars($p['presharedkey'] ?? '') ?>"></td>
+                    <td><input type="text" class="form-control" name="peer_endpoint[]" required value="<?= htmlspecialchars($p['endpoint'] ?? '') ?>"></td>
+                    <td><input type="number" class="form-control" name="peer_endpointport[]" value="<?= htmlspecialchars($p['endpointport'] ?? '51820') ?>"></td>
+                    <td><input type="text" class="form-control" name="peer_allowedips[]" value="<?= htmlspecialchars($p['allowedips'] ?? '0.0.0.0/0, ::/0') ?>"></td>
+                    <td><input type="number" class="form-control" name="peer_keepalive[]" value="<?= htmlspecialchars($p['keepalive'] ?? '25') ?>"></td>
+                    <td><button type="button" class="btn btn-danger btn-xs remove-peer"><i class="fa-solid fa-trash-can"></i></button></td>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+        <button type="button" id="add-peer" class="btn btn-default btn-sm">
+            <i class="fa-solid fa-plus icon-embed-btn"></i><?= gettext('Добавить peer (резервный сервер)') ?>
+        </button>
     </div>
 </div>
 
@@ -348,8 +366,6 @@ include('head.inc');
 </form>
 
 <script>
-/* Простое клиентское добавление/удаление строк peer-таблицы без React/Vue -
-   в стиле остального pfSense GUI (чистый jQuery, уже подключён в head.inc). */
 document.getElementById('add-peer').addEventListener('click', function () {
     var tbody = document.querySelector('#peer-table tbody');
     var row = tbody.rows[0].cloneNode(true);

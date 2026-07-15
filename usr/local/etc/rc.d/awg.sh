@@ -5,15 +5,10 @@
 # KEYWORD: shutdown
 #
 # rc.d-скрипт службы AmneziaWG Client для pfSense 2.8.1.
+# Управляет userspace-процессами amneziawg-go через функции awg_up()/
+# awg_down()/awg_sync_all() из awg.inc.
 #
-# Заменяет собой ручной Shellcmd-хак из оригинальной инструкции
-# track2 (Step 11): там из-за отсутствия нормального rc.d-скрипта
-# автозапуск приходилось городить через сторонний пакет Shellcmd
-# с earlyshellcmd. Здесь мы регистрируем полноценный rc.d-сервис,
-# который pfSense подхватывает штатно на этапе NETWORKING - до того,
-# как происходит назначение интерфейсов, что и требовалось.
-#
-# обязательно сделать - chmod 555 /usr/local/etc/rc.d/awg.sh
+# ОБЯЗАТЕЛЬНО: chmod 555 /usr/local/etc/rc.d/awg.sh после установки.
 
 . /etc/rc.subr
 
@@ -28,8 +23,11 @@ AWGINC="/usr/local/pkg/awg.inc"
 
 awg_start()
 {
+    if [ ! -x /usr/local/bin/amneziawg-go ] || [ ! -x /usr/local/bin/awg ]; then
+        echo "AmneziaWG Client: бинарники не найдены в /usr/local/bin/, служба не запущена."
+        exit 1
+    fi
     echo "Запуск AmneziaWG Client (синхронизация всех туннелей)..."
-    ${PHP} -f ${AWGINC} -- --sync-all 2>/dev/null
     ${PHP} -r "require_once('${AWGINC}'); awg_sync_all();"
 }
 
@@ -45,6 +43,8 @@ awg_stop()
 awg_status_cmd()
 {
     /usr/local/bin/awg show all
+    echo '--- запущенные процессы amneziawg-go ---'
+    pgrep -lf amneziawg-go
 }
 
 load_rc_config $name
