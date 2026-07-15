@@ -290,3 +290,44 @@ function awg_apply_dns(string $ifname, string $dns_csv): void
                "системного resolv.conf в этом пакете намеренно не выполняется, " .
                "чтобы не сломать разрешение имён для остальных служб pfSense.");
 }
+
+/*
+ * awg_install_hook() - ОБНОВЛЕНО: убраны все действия с /boot/loader.conf
+ * и kldload (не нужны в userspace-архитектуре). Вместо этого - проверка
+ * наличия обязательных бинарников и понятная ошибка, если их забыли
+ * скопировать перед установкой pkg.
+ */
+function awg_install_hook(string $stage = 'post'): void
+{
+    if (!is_dir(AWG_CONF_DIR)) {
+        mkdir(AWG_CONF_DIR, 0700, true);
+    }
+    if (!is_dir(AWG_RUN_DIR)) {
+        mkdir(AWG_RUN_DIR, 0700, true);
+    }
+
+    $missing = [];
+    if (!file_exists(AWG_GO_BIN) || !is_executable(AWG_GO_BIN)) {
+        $missing[] = AWG_GO_BIN;
+    }
+    if (!file_exists(AWG_BIN) || !is_executable(AWG_BIN)) {
+        $missing[] = AWG_BIN;
+    }
+    if (!empty($missing)) {
+        log_error('AmneziaWG Client: ВНИМАНИЕ - не найдены обязательные бинарники: ' .
+                   implode(', ', $missing) . '. Пакет установлен, но НЕ будет работать, ' .
+                   'пока вы не скопируете amneziawg-go и awg в /usr/local/bin/ ' .
+                   '(см. README_BUILD.md - сборка на отдельной FreeBSD 15.x build-VM).');
+    } else {
+        log_error('AmneziaWG Client: пакет установлен, бинарники найдены, каталоги конфигурации созданы.');
+    }
+}
+
+function awg_deinstall_hook(string $stage = 'post'): void
+{
+    foreach (awg_get_tunnels() as $t) {
+        awg_down($t, true);
+    }
+    log_error('AmneziaWG Client: пакет удалён, все туннели awgN остановлены. ' .
+               'Бинарники amneziawg-go/awg в /usr/local/bin/ НЕ удалены автоматически.');
+}
