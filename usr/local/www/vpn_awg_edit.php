@@ -281,43 +281,60 @@ include('head.inc');
 </div>
 
 <div class="panel panel-default">
-    <div class="panel-heading">
-        <h2 class="panel-title"><?= gettext('Пиры (внешние серверы AmneziaWG)') ?></h2>
-    </div>
+    <div class="panel-heading"><h2 class="panel-title"><?= gettext('Параметры обфускации AmneziaWG 2.0') ?></h2></div>
     <div class="panel-body">
-        <p class="text-muted">
-            <?= gettext('Каждая запись обязана указывать Endpoint - адрес внешнего сервера. Пакет работает только в клиентском режиме, поэтому добавить peer без Endpoint (ожидание входящих подключений) через этот интерфейс нельзя.') ?>
-        </p>
+        <div class="alert alert-info">
+            <?= gettext('H1-H4 указываются в формате диапазона "min-max" (например, 1166006081-1768483139) ' .
+                        'либо одиночным числом для совместимости с AmneziaWG 1.5. ' .
+                        'Первое число диапазона обязано быть МЕНЬШЕ второго.') ?>
+        </div>
 
-        <table class="table" id="peer-table">
-            <thead>
-                <tr>
-                    <th><?= gettext('Публичный ключ сервера') ?></th>
-                    <th><?= gettext('Preshared key (опц.)') ?></th>
-                    <th><?= gettext('Endpoint (хост/IP)') ?></th>
-                    <th><?= gettext('Порт') ?></th>
-                    <th><?= gettext('AllowedIPs') ?></th>
-                    <th><?= gettext('Keepalive, сек') ?></th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($pconfig['peer'] as $p): ?>
-                <tr>
-                    <td><input type="text" class="form-control" name="peer_pubkey[]" value="<?= htmlspecialchars($p['pubkey'] ?? '') ?>"></td>
-                    <td><input type="text" class="form-control" name="peer_psk[]" value="<?= htmlspecialchars($p['presharedkey'] ?? '') ?>"></td>
-                    <td><input type="text" class="form-control" name="peer_endpoint[]" required value="<?= htmlspecialchars($p['endpoint'] ?? '') ?>"></td>
-                    <td><input type="number" class="form-control" name="peer_endpointport[]" value="<?= htmlspecialchars($p['endpointport'] ?? '51820') ?>"></td>
-                    <td><input type="text" class="form-control" name="peer_allowedips[]" value="<?= htmlspecialchars($p['allowedips'] ?? '0.0.0.0/0, ::/0') ?>"></td>
-                    <td><input type="number" class="form-control" name="peer_keepalive[]" value="<?= htmlspecialchars($p['keepalive'] ?? '25') ?>"></td>
-                    <td><button type="button" class="btn btn-danger btn-xs remove-peer"><i class="fa-solid fa-trash-can"></i></button></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-        <button type="button" id="add-peer" class="btn btn-default btn-sm">
-            <i class="fa-solid fa-plus icon-embed-btn"></i><?= gettext('Добавить peer (резервный сервер)') ?>
-        </button>
+        <div class="row">
+            <?php foreach (['jc'=>'Jc','jmin'=>'Jmin','jmax'=>'Jmax'] as $k=>$label): ?>
+                <div class="col-sm-4 form-group">
+                    <label><?= $label ?></label>
+                    <input type="number" class="form-control" name="<?= $k ?>" value="<?= htmlspecialchars((string)($pconfig[$k] ?? '')) ?>">
+                </div>
+            <?php endforeach; ?>
+        </div>
+        <div class="row">
+            <?php foreach (['s1'=>'S1 (init)','s2'=>'S2 (response)','s3'=>'S3 (cookie)','s4'=>'S4 (data)'] as $k=>$label): ?>
+                <div class="col-sm-3 form-group">
+                    <label><?= $label ?></label>
+                    <input type="number" class="form-control" name="<?= $k ?>" value="<?= htmlspecialchars((string)($pconfig[$k] ?? '0')) ?>">
+                </div>
+            <?php endforeach; ?>
+        </div>
+        <div class="row">
+            <?php foreach (['h1','h2','h3','h4'] as $k): ?>
+                <div class="col-sm-3 form-group">
+                    <label><?= strtoupper($k) ?></label>
+                    <input type="text" class="form-control" name="<?= $k ?>" placeholder="min-max или число"
+                           value="<?= htmlspecialchars((string)($pconfig[$k] ?? '')) ?>">
+                </div>
+            <?php endforeach; ?>
+        </div>
+
+        <div class="alert alert-info">
+            <?= gettext('I1-I5 - опциональные CPS-строки (сигнатуры пакетов). Оставьте пустым поле, если не используется - пустые значения НЕ будут записаны в конфиг (это ловит известный баг парсера awg с пустыми полями).') ?>
+        </div>
+        <?php foreach (['i1','i2','i3','i4','i5'] as $k): ?>
+            <div class="form-group">
+                <label class="col-sm-1 control-label"><?= strtoupper($k) ?></label>
+                <div class="col-sm-11">
+                    <input type="text" class="form-control" name="<?= $k ?>" value="<?= htmlspecialchars((string)($pconfig[$k] ?? '')) ?>">
+                </div>
+            </div>
+        <?php endforeach; ?>
+
+        <div class="form-group">
+            <label class="col-sm-2 control-label"><?= gettext('DNS-серверы (через запятую)') ?></label>
+            <div class="col-sm-6">
+                <input type="text" class="form-control" name="dns" placeholder="172.29.172.254, 1.0.0.1"
+                       value="<?= htmlspecialchars((string)($pconfig['dns'] ?? '')) ?>">
+                <span class="help-block small"><?= gettext('Автоматически не применяется - настройте DNS Resolver в System -> General Setup вручную по подсказке в логе после Apply.') ?></span>
+            </div>
+        </div>
     </div>
 </div>
 
