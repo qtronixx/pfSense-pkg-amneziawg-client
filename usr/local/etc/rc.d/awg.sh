@@ -25,7 +25,7 @@ awg_start()
 {
     if [ ! -x /usr/local/bin/amneziawg-go ] || [ ! -x /usr/local/bin/awg ]; then
         echo "AmneziaWG Client: бинарники не найдены в /usr/local/bin/, служба не запущена."
-        exit 1
+        return 1
     fi
     echo "Запуск AmneziaWG Client (синхронизация всех туннелей)..."
     ${PHP} -r "require_once('${AWGINC}'); awg_sync_all();"

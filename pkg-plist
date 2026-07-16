@@ -16,6 +16,3 @@
 /usr/local/www/widgets/widgets/awg_status.xml
 /usr/local/etc/rc.d/awg.sh
 /etc/inc/priv/awg.priv.inc
-
-@postexec /usr/local/pkg/awg.inc awg_install_hook post
-@postunexec /usr/local/pkg/awg.inc awg_deinstall_hook post

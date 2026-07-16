@@ -4,19 +4,28 @@
  * -----------------------------------------------------------------------
  * Backend-библиотека пакета AmneziaWG Client для pfSense 2.8.1.
  *
- * АРХИТЕКТУРА (итоговая, подтверждена практическим тестированием
- * 15 июля 2026 на реальной VM с pfSense 2.8.1 и реальным AmneziaWG-
- * сервером): полностью userspace, через демон amneziawg-go +
- * утилиту awg (amneziawg-tools). Кернел-модуль if_awg.ko НЕ
- * используется - исходники ядра pfSense для веток 2.8.x не
- * публикуются Netgate в открытом доступе, что делает сборку
- * ABI-совместимого модуля невозможной без риска kernel panic.
+ * АРХИТЕКТУРА: полностью userspace (amneziawg-go + amneziawg-tools),
+ * без кернел-модуля - подтверждено практическим тестированием на
+ * реальной VM pfSense 2.8.1 с реальным AmneziaWG-сервером (15.07.2026).
  *
- * ОГРАНИЧЕНИЕ (клиентский режим, по ТЗ): пакет работает ИСКЛЮЧИТЕЛЬНО
- * как клиент внешнего AmneziaWG-сервера. Каждый "туннель" - это один
- * локальный интерфейс awgN с одним или несколькими peer'ами, где
- * peer обязан иметь Endpoint (внешний сервер), а не ожидать входящих
- * подключений.
+ * ОГРАНИЧЕНИЕ (клиентский режим): пакет работает ИСКЛЮЧИТЕЛЬНО как
+ * клиент внешнего AmneziaWG-сервера. Каждый peer обязан иметь Endpoint.
+ *
+ * ИСПРАВЛЕНИЯ ПО ИТОГАМ РЕВЬЮ (16.07.2026):
+ *   - awg_genkey(): убран bashism <<< (не работает в /bin/sh на
+ *     FreeBSD - там ash), приватный ключ передаётся через stdin
+ *     (proc_open), а не через argv (не виден в ps/proc).
+ *   - awg_conf_path(): защита от path traversal - строгая валидация
+ *     имени интерфейса внутри самой функции, а не только на GUI-форме.
+ *   - awg_up()/awg_down(): маршруты, добавленные под AllowedIPs,
+ *     теперь отслеживаются в *.routes и корректно удаляются в
+ *     awg_down() - раньше накапливались при каждом перезапуске.
+ *   - awg_down(): guard на отсутствие расширения posix.
+ *   - awg_up(): setconf теперь с retry (защита от гонки, когда
+ *     UAPI-сокет создан, но демон ещё не начал accept()).
+ *   - awg_save_tunnels(): проверка результата write_config().
+ *   - Санитайзинг пользовательских данных перед log_error() - защита
+ *     от log injection через символы новой строки.
  * -----------------------------------------------------------------------
  */
 
@@ -35,7 +44,16 @@ const AWG_CONF_DIR     = '/usr/local/etc/amnezia/amneziawg/';
 const AWG_BIN          = '/usr/local/bin/awg';
 const AWG_GO_BIN       = '/usr/local/bin/amneziawg-go';
 const AWG_RUN_DIR      = '/var/run/amneziawg/';
-const AWG_UAPI_DIR     = '/var/run/amneziawg/';   // amneziawg-go кладёт awgN.sock именно сюда
+const AWG_UAPI_DIR     = '/var/run/amneziawg/';
+
+/*
+ * Убирает переводы строк из значений, которые попадут в log_error() -
+ * защита от log injection (найдено в ревью 16.07.2026).
+ */
+function awg_log_safe(string $v): string
+{
+    return str_replace(["\r", "\n"], ' ', $v);
+}
 
 /* --- Обёртки чтения/записи конфига (совместимость pfSense 2.8.x) --- */
 function awg_config_get_path(string $path, $default = null)
@@ -83,34 +101,72 @@ function awg_get_tunnels(): array
     return is_array($tunnels) ? $tunnels : [];
 }
 
-function awg_save_tunnels(array $tunnels): void
+/*
+ * ИСПРАВЛЕНО: проверяем результат write_config() - раньше ошибка
+ * записи на диск (нет места, нет прав) проходила незамеченной, GUI
+ * показывал успех, а изменения терялись при перезагрузке.
+ */
+function awg_save_tunnels(array $tunnels): bool
 {
     awg_config_set_path(AWG_XML_ROOT . '/' . AWG_XML_SECTION . '/tunnels/tunnel', $tunnels);
-    write_config('AmneziaWG Client: обновление конфигурации туннелей');
+    $ok = write_config('AmneziaWG Client: обновление конфигурации туннелей');
+    if ($ok === false) {
+        log_error('AmneziaWG Client: КРИТИЧНО - write_config() вернул ошибку, изменения могли не сохраниться на диск.');
+        return false;
+    }
+    return true;
 }
 
-/* --- Генерация ключей --- */
+/*
+ * ИСПРАВЛЕНО: убран bashism <<<, приватный ключ передаётся через
+ * stdin процесса `awg pubkey`, а не через argv (не светится в ps/proc).
+ */
 function awg_genkey(): array
 {
     $privkey = trim((string) shell_exec(escapeshellcmd(AWG_BIN) . ' genkey'));
     if ($privkey === '') {
         return ['error' => 'Не удалось сгенерировать приватный ключ (проверьте наличие ' . AWG_BIN . ')'];
     }
-    $pubkey = trim((string) shell_exec(
-        escapeshellcmd(AWG_BIN) . ' pubkey <<< ' . escapeshellarg($privkey)
-    ));
+
+    $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+    $proc = proc_open(escapeshellcmd(AWG_BIN) . ' pubkey', $descriptors, $pipes);
+    if (!is_resource($proc)) {
+        return ['error' => 'Не удалось запустить ' . AWG_BIN . ' pubkey'];
+    }
+    fwrite($pipes[0], $privkey . "\n");
+    fclose($pipes[0]);
+    $pubkey = trim((string) stream_get_contents($pipes[1]));
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    proc_close($proc);
+
+    if ($pubkey === '') {
+        return ['error' => 'awg pubkey не вернул результат'];
+    }
+
     return ['privkey' => $privkey, 'pubkey' => $pubkey];
 }
 
-/* --- Пути к рабочим файлам --- */
+/*
+ * ИСПРАВЛЕНО: защита от path traversal - строгая валидация имени
+ * интерфейса ВНУТРИ функции, независимо от того, что делает GUI-форма.
+ */
 function awg_conf_path(string $ifname): string
 {
+    if (!preg_match('/^awg[0-9]{1,3}$/', $ifname)) {
+        throw new InvalidArgumentException("AmneziaWG: недопустимое имя интерфейса '{$ifname}'");
+    }
     return AWG_CONF_DIR . $ifname . '.conf';
 }
 
 function awg_pidfile(string $ifname): string
 {
     return AWG_RUN_DIR . $ifname . '.pid';
+}
+
+function awg_routesfile(string $ifname): string
+{
+    return AWG_RUN_DIR . $ifname . '.routes';
 }
 
 function awg_uapi_sock(string $ifname): string
@@ -120,9 +176,6 @@ function awg_uapi_sock(string $ifname): string
 
 /*
  * Валидация обфускационных параметров AmneziaWG 2.0.
- * Подтверждено практическим тестом: диапазоны H1-H4 с min >= max
- * ломают весь setconf невнятной ошибкой "Invalid argument" - эта
- * валидация ловит такие опечатки до отправки в awg.
  */
 function awg_validate_obfuscation(array $t): array
 {
@@ -165,8 +218,7 @@ function awg_validate_obfuscation(array $t): array
             $min = (int)$min;
             $max = (int)$max;
             if ($min >= $max) {
-                $errors[] = strtoupper($key) . ": первое число диапазона ({$min}) должно быть МЕНЬШЕ второго ({$max}). " .
-                            "Проверьте, не перепутаны ли значения при копировании.";
+                $errors[] = strtoupper($key) . ": первое число диапазона ({$min}) должно быть МЕНЬШЕ второго ({$max}).";
                 continue;
             }
             if ($max > 2147483647) {
@@ -200,18 +252,13 @@ function awg_validate_obfuscation(array $t): array
             continue;
         }
         if (!preg_match('/^(<[a-z]+[^>]*>)+$/i', $val)) {
-            $errors[] = strtoupper($key) . ': не похоже на корректный CPS-формат (ожидаются теги вида <b 0x...>, <r N>, <t>...).';
+            $errors[] = strtoupper($key) . ': не похоже на корректный CPS-формат.';
         }
     }
 
     return $errors;
 }
 
-/*
- * Генерация конфиг-файла. I1-I5 пишутся ТОЛЬКО если непустые -
- * подтверждённый баг парсера awg setconf: "Line unrecognized: `I2='"
- * при пустом значении с "=".
- */
 function awg_build_conf(array $t): string
 {
     $lines   = [];
@@ -274,23 +321,28 @@ function awg_build_conf(array $t): string
 
 function awg_write_conf(array $t): bool
 {
+    if (empty($t['name'])) {
+        log_error('AmneziaWG: awg_write_conf() вызван без имени интерфейса - отменено.');
+        return false;
+    }
     if (!is_dir(AWG_CONF_DIR)) {
         @mkdir(AWG_CONF_DIR, 0700, true);
     }
-    $path = awg_conf_path($t['name']);
+    $path = awg_conf_path($t['name']); // бросит исключение при недопустимом имени
     $ok = (bool) @file_put_contents($path, awg_build_conf($t));
     if ($ok) {
         @chmod($path, 0600);
         @chown($path, 'root');
+    } else {
+        log_error("AmneziaWG: не удалось записать конфиг {$path} - проверьте права и свободное место на диске.");
     }
     return $ok;
 }
 
 /*
- * awg_up() - поднимает туннель через userspace-демон amneziawg-go,
- * применяет конфиг через awg setconf, назначает адрес и ПРОКЛАДЫВАЕТ
- * МАРШРУТЫ под AllowedIPs (подтверждённая практикой находка: без
- * этого handshake проходит, но трафик никуда не идёт).
+ * awg_up() - поднимает туннель. ИСПРАВЛЕНО: setconf теперь с retry
+ * (защита от гонки после ожидания UAPI-сокета), маршруты записываются
+ * в *.routes для последующей корректной очистки в awg_down().
  */
 function awg_up(array $t): array
 {
@@ -324,11 +376,19 @@ function awg_up(array $t): array
         return ['ok' => false, 'error' => "amneziawg-go не поднял UAPI-сокет для {$ifname}, см. {$log}"];
     }
 
+    // ИСПРАВЛЕНО: retry на случай, если сокет создан, но демон ещё
+    // не начал accept() (гонка, найденная в ревью).
     $out = [];
-    $rc  = 0;
-    exec(escapeshellcmd(AWG_BIN) . ' setconf ' . escapeshellarg($ifname) . ' ' . escapeshellarg($conf) . ' 2>&1', $out, $rc);
+    $rc  = 1;
+    for ($attempt = 0; $attempt < 3 && $rc !== 0; $attempt++) {
+        if ($attempt > 0) {
+            usleep(300000);
+        }
+        $out = [];
+        exec(escapeshellcmd(AWG_BIN) . ' setconf ' . escapeshellarg($ifname) . ' ' . escapeshellarg($conf) . ' 2>&1', $out, $rc);
+    }
     if ($rc !== 0) {
-        return ['ok' => false, 'error' => 'awg setconf: ' . implode("\n", $out)];
+        return ['ok' => false, 'error' => 'awg setconf (после 3 попыток): ' . implode("\n", $out)];
     }
 
     if (!empty($t['address'])) {
@@ -339,10 +399,13 @@ function awg_up(array $t): array
     }
     mwexec('/sbin/ifconfig ' . escapeshellarg($ifname) . ' up', true);
 
+    // Маршруты под AllowedIPs - ИСПРАВЛЕНО: теперь записываем список
+    // добавленных маршрутов в *.routes, чтобы awg_down() мог их удалить.
     $peers = $t['peer'] ?? [];
     if (isset($peers['pubkey'])) {
         $peers = [$peers];
     }
+    $routes_added = [];
     foreach ($peers as $peer) {
         foreach (explode(',', (string)($peer['allowedips'] ?? '')) as $cidr) {
             $cidr = trim($cidr);
@@ -351,15 +414,17 @@ function awg_up(array $t): array
             }
             if ($cidr === '0.0.0.0/0' || $cidr === '::/0') {
                 log_error("AmneziaWG: {$ifname} peer имеет full-tunnel AllowedIPs ({$cidr}) - " .
-                           "настройте gateway и policy routing штатно через GUI pfSense " .
-                           "(Interfaces -> Assignments, System -> Routing -> Gateways). " .
-                           "Автоматический route add для 0.0.0.0/0 пакет намеренно не выполняет.");
+                           "настройте gateway и policy routing штатно через GUI pfSense.");
                 continue;
             }
             $isv6 = strpos($cidr, ':') !== false;
             $famFlag = $isv6 ? '-inet6' : '-inet';
             mwexec("/sbin/route add {$famFlag} -net " . escapeshellarg($cidr) . ' -interface ' . escapeshellarg($ifname), true);
+            $routes_added[] = ($isv6 ? '6' : '4') . ':' . $cidr;
         }
+    }
+    if (!empty($routes_added)) {
+        file_put_contents(awg_routesfile($ifname), implode("\n", $routes_added));
     }
 
     if (!empty($t['dns'])) {
@@ -370,8 +435,9 @@ function awg_up(array $t): array
 }
 
 /*
- * awg_down() - останавливает процесс amneziawg-go по pid-файлу,
- * подчищает tun-интерфейс и UAPI-сокет.
+ * awg_down() - ИСПРАВЛЕНО: удаляет маршруты, добавленные в awg_up()
+ * (раньше накапливались при каждом перезапуске туннеля). Добавлен
+ * guard на отсутствие расширения posix.
  */
 function awg_down(array $t, bool $silent = false): void
 {
@@ -380,14 +446,38 @@ function awg_down(array $t, bool $silent = false): void
 
     if (file_exists($pidfile)) {
         $pid = (int) trim((string) file_get_contents($pidfile));
-        if ($pid > 0 && posix_kill($pid, 0)) {
-            posix_kill($pid, SIGTERM);
-            usleep(1000000);
-            if (posix_kill($pid, 0)) {
-                posix_kill($pid, SIGKILL);
+        if ($pid > 0) {
+            if (function_exists('posix_kill')) {
+                if (posix_kill($pid, 0)) {
+                    posix_kill($pid, SIGTERM);
+                    usleep(1000000);
+                    if (posix_kill($pid, 0)) {
+                        posix_kill($pid, SIGKILL);
+                    }
+                }
+            } else {
+                // Guard из ревью: posix-расширение может отсутствовать -
+                // используем kill(1) как fallback вместо фатальной ошибки.
+                mwexec('/bin/kill ' . escapeshellarg((string)$pid), true);
             }
         }
         @unlink($pidfile);
+    }
+
+    // Удаляем маршруты, добавленные при последнем awg_up() для этого туннеля.
+    $routes_file = awg_routesfile($ifname);
+    if (file_exists($routes_file)) {
+        $lines = file($routes_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+            $parts = explode(':', $line, 2);
+            if (count($parts) !== 2) {
+                continue;
+            }
+            [$fam, $cidr] = $parts;
+            $famFlag = $fam === '6' ? '-inet6' : '-inet';
+            mwexec("/sbin/route delete {$famFlag} -net " . escapeshellarg($cidr), true);
+        }
+        @unlink($routes_file);
     }
 
     if (does_interface_exist($ifname)) {
@@ -396,24 +486,12 @@ function awg_down(array $t, bool $silent = false): void
     @unlink(awg_uapi_sock($ifname));
 }
 
-/*
- * DNS: не перезаписываем системный resolv.conf автоматически - только
- * предупреждаем в логе, что нужно настроить DNS Resolver вручную.
- * Осознанное решение: авто-перезапись resolv.conf может сломать
- * разрешение имён для остальных служб pfSense.
- */
 function awg_apply_dns(string $ifname, string $dns_csv): void
 {
-    log_error("AmneziaWG: {$ifname} - DNS-серверы ({$dns_csv}) получены из конфига. " .
-               "Настройте System -> General Setup -> DNS Servers или DNS Resolver " .
-               "Forwarding вручную - автоматическая перезапись resolv.conf в этом " .
-               "пакете намеренно не выполняется.");
+    log_error("AmneziaWG: " . awg_log_safe($ifname) . " - DNS-серверы (" . awg_log_safe($dns_csv) . ") получены из конфига. " .
+               "Настройте System -> General Setup -> DNS Servers или DNS Resolver Forwarding вручную.");
 }
 
-/*
- * Синхронизирует ВСЕ настроенные туннели - используется службой при
- * старте (rc.d), а также кнопкой "Apply changes" в GUI.
- */
 function awg_sync_all(): void
 {
     foreach (awg_get_tunnels() as $t) {
@@ -423,17 +501,11 @@ function awg_sync_all(): void
         }
         $result = awg_up($t);
         if (empty($result['ok'])) {
-            log_error('AmneziaWG: ошибка поднятия туннеля ' . $t['name'] . ': ' . ($result['error'] ?? 'неизвестная ошибка'));
+            log_error('AmneziaWG: ошибка поднятия туннеля ' . awg_log_safe($t['name']) . ': ' . awg_log_safe($result['error'] ?? 'неизвестная ошибка'));
         }
     }
 }
 
-/*
- * install/deinstall хуки пакета. Проверяют наличие обязательных
- * бинарников amneziawg-go/awg - без них служба не заработает, но
- * pkg install не должен падать целиком из-за этого (можно донести
- * бинарники позже).
- */
 function awg_install_hook(string $stage = 'post'): void
 {
     if (!is_dir(AWG_CONF_DIR)) {
@@ -452,9 +524,7 @@ function awg_install_hook(string $stage = 'post'): void
     }
     if (!empty($missing)) {
         log_error('AmneziaWG Client: ВНИМАНИЕ - не найдены обязательные бинарники: ' .
-                   implode(', ', $missing) . '. Пакет установлен, но НЕ будет работать, ' .
-                   'пока вы не скопируете amneziawg-go и awg в /usr/local/bin/ ' .
-                   '(см. scripts/install_binaries.sh и README.md).');
+                   implode(', ', $missing) . '. Скопируйте их в /usr/local/bin/ (scripts/install_binaries.sh).');
     } else {
         log_error('AmneziaWG Client: пакет установлен, бинарники найдены, каталоги конфигурации созданы.');
     }
@@ -465,6 +535,5 @@ function awg_deinstall_hook(string $stage = 'post'): void
     foreach (awg_get_tunnels() as $t) {
         awg_down($t, true);
     }
-    log_error('AmneziaWG Client: пакет удалён, все туннели awgN остановлены. ' .
-               'Бинарники amneziawg-go/awg в /usr/local/bin/ НЕ удалены автоматически.');
+    log_error('AmneziaWG Client: пакет удалён, все туннели awgN остановлены. Бинарники в /usr/local/bin/ НЕ удалены автоматически.');
 }
