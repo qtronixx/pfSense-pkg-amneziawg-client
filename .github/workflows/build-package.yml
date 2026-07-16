@@ -27,23 +27,28 @@ jobs:
           run: |
             set -e
 
-            # Собираем staging-дерево напрямую из структуры репозитория -
-            # она зеркалит конечные пути установки (etc/... -> /etc/...,
-            # usr/... -> /usr/...), поэтому просто копируем оба каталога
-            # целиком, без перечисления файлов поимённо.
-            mkdir -p staging
+            mkdir -p staging metadatadir
             cp -R etc staging/etc
             cp -R usr staging/usr
-
-            # rc.d-скрипт обязан быть исполняемым - см. историю правок
-            # (изначально указывалось chmod 555 отдельным шагом инструкции,
-            # здесь фиксируем это прямо в сборке, чтобы не забыть).
             chmod 555 staging/usr/local/etc/rc.d/awg.sh
 
-            # Манифест передаётся напрямую в -M, без переименования в
-            # +MANIFEST - это корректный современный синтаксис pkg-create(8),
-            # имя файла не обязано быть именно "+MANIFEST".
-            pkg create -M manifest.ucl -r staging -o .
+            # metadatadir должен содержать +MANIFEST (не manifest.ucl -
+            # для -m именно такое имя ожидается по конвенции)
+            cp manifest.ucl metadatadir/+MANIFEST
+
+            echo "=== Содержимое staging/ ==="
+            find staging -type f
+
+            # pkg-plist - пути ОТНОСИТЕЛЬНО staging (то есть без ведущего /)
+            cd staging
+            find . -type f | sed 's|^\./||' > ../pkg-plist-generated
+            cd ..
+            cat pkg-plist-generated
+
+            pkg create -m metadatadir -p pkg-plist-generated -r staging -o .
+
+            echo "=== Результат ==="
+            ls -la *.pkg
 
       - name: Archive build artifacts for download
         uses: actions/upload-artifact@v4
