@@ -103,5 +103,5 @@ function awg_validate_tunnel_form(array $pconfig): array
  */
 function awg_is_valid_key(string $key): bool
 {
-    return (bool) preg_match('/^[A-Za-z0-9+\/]{42,43}=$/', trim($key));
+    return (bool) preg_match('/^[A-Za-z0-9+\/]{43}=$/', trim($key));
 }
