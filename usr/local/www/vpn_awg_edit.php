@@ -2,14 +2,16 @@
 /*
  * vpn_awg_edit.php
  * -----------------------------------------------------------------------
- * Форма добавления/редактирования одного клиентского туннеля AmneziaWG.
- *
- * ИТОГОВАЯ ВЕРСИЯ (пересобрана заново - предыдущая копия в репозитории
- * содержала дублирующиеся блоки обфускации и утерянную таблицу Peer,
- * из-за чего форма была нерабочей).
- *
- * Endpoint обязателен для каждого peer - техническая реализация
- * клиентского ограничения: без Endpoint peer через эту форму не добавить.
+ * ИСПРАВЛЕНИЯ (17.07.2026):
+ *   - Добавлен class="form-horizontal" на <form> - без него Bootstrap
+ *     не выравнивает label (col-sm-2) и поле (col-sm-10) горизонтально,
+ *     что и давало "съехавшую" вёрстку.
+ *   - id формы переименован с "iform" на "awgform" - на диагностику:
+ *     штатный JS pfSense может по-особому обрабатывать формы именно
+ *     с id="iform", это исключает такое поведение как причину
+ *     несрабатывающего сохранения.
+ *   - Добавлено логирование через awg_debug() на каждом шаге обработки
+ *     POST - для диагностики, почему сохранение не срабатывало.
  * -----------------------------------------------------------------------
  */
 
@@ -23,12 +25,6 @@ global $config;
 
 $pgtitle = [gettext('VPN'), gettext('AmneziaWG'), gettext('Редактировать')];
 
-/*
- * Подбирает следующее свободное имя интерфейса awgN.
- * ВАЖНО: объявлена ДО первого использования - в PHP это не имеет
- * значения (функции поднимаются на этапе разбора файла), но для
- * читаемости кода вынесена в начало.
- */
 function awg_next_free_name(): string
 {
     $used = array_column(awg_get_tunnels(), 'name');
@@ -78,6 +74,9 @@ $pconfig = [
 
 if ($id !== null && isset($tunnels[$id])) {
     $pconfig = array_merge($pconfig, $tunnels[$id]);
+    foreach (['i1', 'i2', 'i3', 'i4', 'i5'] as $k) {
+        $pconfig[$k] = awg_decode_cps((string)($pconfig[$k] ?? ''));
+    }
     if (isset($pconfig['peer']['pubkey'])) {
         $pconfig['peer'] = [$pconfig['peer']];
     }
@@ -88,10 +87,16 @@ $input_errors = [];
 /* -----------------------------------------------------------------
  * Обработка POST
  * ----------------------------------------------------------------- */
-if ($_POST['save'] ?? false) {
+awg_debug('vpn_awg_edit.php: REQUEST_METHOD=' . ($_SERVER['REQUEST_METHOD'] ?? '?'));
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    awg_debug('POST получен, ключи: ' . implode(', ', array_keys($_POST)));
+
     $pconfig = $_POST;
 
     $peer_count = count($_POST['peer_pubkey'] ?? []);
+    awg_debug('peer_count из POST: ' . $peer_count);
+
     $peers = [];
     for ($i = 0; $i < $peer_count; $i++) {
         if (trim((string)($_POST['peer_pubkey'][$i] ?? '')) === '') {
@@ -107,60 +112,81 @@ if ($_POST['save'] ?? false) {
         ];
     }
     $pconfig['peer'] = $peers;
+    awg_debug('Собрано peers: ' . count($peers));
 
-    $input_errors = awg_validate_tunnel_form($pconfig);
-
-    if (empty($input_errors)) {
-        // ВАЖНО: перенесены ВСЕ поля, включая s3/s4/i1-i5/dns -
-        // в предыдущей версии файла именно тут они терялись при сохранении.
-        $entry = [
-            'name'       => $pconfig['name'],
-            'enabled'    => !empty($pconfig['enabled']) ? '1' : '',
-            'descr'      => $pconfig['descr'] ?? '',
-            'privkey'    => $pconfig['privkey'],
-            'pubkey'     => $pconfig['pubkey'] ?? '',
-            'address'    => $pconfig['address'] ?? '',
-            'address6'   => $pconfig['address6'] ?? '',
-            'listenport' => $pconfig['listenport'] ?? '',
-            'mtu'        => $pconfig['mtu'] ?? '1420',
-            'jc'         => $pconfig['jc'],
-            'jmin'       => $pconfig['jmin'],
-            'jmax'       => $pconfig['jmax'],
-            's1'         => $pconfig['s1'],
-            's2'         => $pconfig['s2'],
-            's3'         => $pconfig['s3'] ?? '0',
-            's4'         => $pconfig['s4'] ?? '0',
-            'h1'         => $pconfig['h1'],
-            'h2'         => $pconfig['h2'],
-            'h3'         => $pconfig['h3'],
-            'h4'         => $pconfig['h4'],
-            'i1'         => trim((string)($pconfig['i1'] ?? '')),
-            'i2'         => trim((string)($pconfig['i2'] ?? '')),
-            'i3'         => trim((string)($pconfig['i3'] ?? '')),
-            'i4'         => trim((string)($pconfig['i4'] ?? '')),
-            'i5'         => trim((string)($pconfig['i5'] ?? '')),
-            'dns'        => trim((string)($pconfig['dns'] ?? '')),
-            'peer'       => $peers,
-        ];
-
-        if ($id !== null && isset($tunnels[$id])) {
-            $tunnels[$id] = $entry;
-        } else {
-            $tunnels[] = $entry;
+    if ($_POST['genkey'] ?? false) {
+        awg_debug('Нажата кнопка genkey');
+        $kp = awg_genkey();
+        $pconfig['privkey'] = $kp['privkey'] ?? '';
+        $pconfig['pubkey']  = $kp['pubkey'] ?? '';
+        if (!empty($kp['error'])) {
+            awg_debug('awg_genkey() ошибка: ' . $kp['error']);
         }
-
-        awg_save_tunnels($tunnels);
-        awg_write_conf($entry);
-
-        header('Location: /vpn_awg_tunnels.php');
-        exit;
     }
-}
 
-if (($_POST['genkey'] ?? false)) {
-    $kp = awg_genkey();
-    $pconfig['privkey'] = $kp['privkey'] ?? '';
-    $pconfig['pubkey']  = $kp['pubkey'] ?? '';
+    if ($_POST['save'] ?? false) {
+        awg_debug('Нажата кнопка save, запускаю валидацию');
+        $input_errors = awg_validate_tunnel_form($pconfig);
+        awg_debug('Результат валидации, ошибок: ' . count($input_errors) . ' | ' . implode(' || ', $input_errors));
+
+        if (empty($input_errors)) {
+            // Защита от обхода readonly на имени интерфейса при редактировании -
+            // берём имя из уже сохранённого туннеля, а не из POST.
+            $final_name = ($id !== null && isset($tunnels[$id]))
+                ? $tunnels[$id]['name']
+                : $pconfig['name'];
+
+            $entry = [
+                'name'       => $final_name,
+                'enabled'    => !empty($pconfig['enabled']) ? '1' : '',
+                'descr'      => $pconfig['descr'] ?? '',
+                'privkey'    => $pconfig['privkey'],
+                'pubkey'     => $pconfig['pubkey'] ?? '',
+                'address'    => $pconfig['address'] ?? '',
+                'address6'   => $pconfig['address6'] ?? '',
+                'listenport' => $pconfig['listenport'] ?? '',
+                'mtu'        => $pconfig['mtu'] ?? '1420',
+                'jc'         => $pconfig['jc'],
+                'jmin'       => $pconfig['jmin'],
+                'jmax'       => $pconfig['jmax'],
+                's1'         => $pconfig['s1'],
+                's2'         => $pconfig['s2'],
+                's3'         => $pconfig['s3'] ?? '0',
+                's4'         => $pconfig['s4'] ?? '0',
+                'h1'         => $pconfig['h1'],
+                'h2'         => $pconfig['h2'],
+                'h3'         => $pconfig['h3'],
+                'h4'         => $pconfig['h4'],
+                'i1' => awg_encode_cps(trim((string)($pconfig['i1'] ?? ''))),
+                'i2' => awg_encode_cps(trim((string)($pconfig['i2'] ?? ''))),
+                'i3' => awg_encode_cps(trim((string)($pconfig['i3'] ?? ''))),
+                'i4' => awg_encode_cps(trim((string)($pconfig['i4'] ?? ''))),
+                'i5' => awg_encode_cps(trim((string)($pconfig['i5'] ?? ''))),
+                'dns'        => trim((string)($pconfig['dns'] ?? '')),
+                'peer'       => $peers,
+            ];
+
+            if ($id !== null && isset($tunnels[$id])) {
+                $tunnels[$id] = $entry;
+                awg_debug('Обновляю существующий туннель id=' . $id);
+            } else {
+                $tunnels[] = $entry;
+                awg_debug('Добавляю новый туннель: ' . $entry['name']);
+            }
+
+            $save_ok = awg_save_tunnels($tunnels);
+            awg_debug('awg_save_tunnels() результат: ' . ($save_ok ? 'true' : 'FALSE'));
+
+            $conf_ok = awg_write_conf($entry);
+            awg_debug('awg_write_conf() результат: ' . ($conf_ok ? 'true' : 'FALSE'));
+
+            awg_debug('Редирект на vpn_awg_tunnels.php');
+            header('Location: /vpn_awg_tunnels.php');
+            exit;
+        } else {
+            awg_debug('Валидация не прошла, форма НЕ сохранена, показываю ошибки пользователю');
+        }
+    }
 }
 
 include('head.inc');
@@ -172,7 +198,7 @@ include('head.inc');
     <?php print_input_errors($input_errors); ?>
 <?php endif; ?>
 
-<form method="post" name="iform" id="iform">
+<form method="post" name="awgform" id="awgform" class="form-horizontal">
 <input type="hidden" name="id" value="<?= htmlspecialchars((string)($id ?? '')) ?>">
 
 <div class="panel panel-default">
@@ -272,32 +298,45 @@ include('head.inc');
     <div class="panel-heading"><h2 class="panel-title"><?= gettext('Параметры обфускации AmneziaWG 2.0') ?></h2></div>
     <div class="panel-body">
         <div class="alert alert-info">
-            <?= gettext('Все значения должны ТОЧНО совпадать со значениями на сервере. H1-H4 указываются в формате диапазона "min-max" (например, 1166006081-1768483139) либо одиночным числом для совместимости с AmneziaWG 1.5. Первое число диапазона обязано быть МЕНЬШЕ второго.') ?>
+            <?= gettext('Все значения должны ТОЧНО совпадать со значениями на сервере. H1-H4 указываются в формате диапазона "min-max" либо одиночным числом.') ?>
         </div>
 
-        <div class="row">
-            <?php foreach (['jc'=>'Jc','jmin'=>'Jmin','jmax'=>'Jmax'] as $k=>$label): ?>
-                <div class="col-sm-4 form-group">
-                    <label><?= $label ?></label>
-                    <input type="number" class="form-control" name="<?= $k ?>" value="<?= htmlspecialchars((string)($pconfig[$k] ?? '')) ?>">
-                </div>
-            <?php endforeach; ?>
+        <div class="form-group">
+            <label class="col-sm-2 control-label">Jc / Jmin / Jmax</label>
+            <div class="col-sm-2">
+                <input type="number" class="form-control" name="jc" placeholder="Jc" value="<?= htmlspecialchars((string)($pconfig['jc'] ?? '')) ?>">
+            </div>
+            <div class="col-sm-2">
+                <input type="number" class="form-control" name="jmin" placeholder="Jmin" value="<?= htmlspecialchars((string)($pconfig['jmin'] ?? '')) ?>">
+            </div>
+            <div class="col-sm-2">
+                <input type="number" class="form-control" name="jmax" placeholder="Jmax" value="<?= htmlspecialchars((string)($pconfig['jmax'] ?? '')) ?>">
+            </div>
         </div>
-        <div class="row">
-            <?php foreach (['s1'=>'S1 (init)','s2'=>'S2 (response)','s3'=>'S3 (cookie)','s4'=>'S4 (data)'] as $k=>$label): ?>
-                <div class="col-sm-3 form-group">
-                    <label><?= $label ?></label>
-                    <input type="number" class="form-control" name="<?= $k ?>" value="<?= htmlspecialchars((string)($pconfig[$k] ?? '0')) ?>">
-                </div>
-            <?php endforeach; ?>
+
+        <div class="form-group">
+            <label class="col-sm-2 control-label">S1 / S2 / S3 / S4</label>
+            <div class="col-sm-2">
+                <input type="number" class="form-control" name="s1" value="<?= htmlspecialchars((string)($pconfig['s1'] ?? '0')) ?>">
+            </div>
+            <div class="col-sm-2">
+                <input type="number" class="form-control" name="s2" value="<?= htmlspecialchars((string)($pconfig['s2'] ?? '0')) ?>">
+            </div>
+            <div class="col-sm-2">
+                <input type="number" class="form-control" name="s3" value="<?= htmlspecialchars((string)($pconfig['s3'] ?? '0')) ?>">
+            </div>
+            <div class="col-sm-2">
+                <input type="number" class="form-control" name="s4" value="<?= htmlspecialchars((string)($pconfig['s4'] ?? '0')) ?>">
+            </div>
         </div>
-        <div class="row">
+
+        <div class="form-group">
+            <label class="col-sm-2 control-label">H1-H4</label>
             <?php foreach (['h1','h2','h3','h4'] as $k): ?>
-                <div class="col-sm-3 form-group">
-                    <label><?= strtoupper($k) ?></label>
-                    <input type="text" class="form-control" name="<?= $k ?>" placeholder="min-max или число"
-                           value="<?= htmlspecialchars((string)($pconfig[$k] ?? '')) ?>">
-                </div>
+            <div class="col-sm-2">
+                <input type="text" class="form-control" name="<?= $k ?>" placeholder="min-max"
+                       value="<?= htmlspecialchars((string)($pconfig[$k] ?? '')) ?>">
+            </div>
             <?php endforeach; ?>
         </div>
 
@@ -305,12 +344,12 @@ include('head.inc');
             <?= gettext('I1-I5 - опциональные CPS-строки. Пустые поля НЕ записываются в конфиг.') ?>
         </div>
         <?php foreach (['i1','i2','i3','i4','i5'] as $k): ?>
-            <div class="form-group">
-                <label class="col-sm-1 control-label"><?= strtoupper($k) ?></label>
-                <div class="col-sm-11">
-                    <input type="text" class="form-control" name="<?= $k ?>" value="<?= htmlspecialchars((string)($pconfig[$k] ?? '')) ?>">
-                </div>
+        <div class="form-group">
+            <label class="col-sm-2 control-label"><?= strtoupper($k) ?></label>
+            <div class="col-sm-10">
+                <input type="text" class="form-control" name="<?= $k ?>" value="<?= htmlspecialchars((string)($pconfig[$k] ?? '')) ?>">
             </div>
+        </div>
         <?php endforeach; ?>
     </div>
 </div>
@@ -324,6 +363,7 @@ include('head.inc');
             <?= gettext('Каждая запись обязана указывать Endpoint - адрес внешнего сервера.') ?>
         </p>
 
+        <div class="table-responsive">
         <table class="table" id="peer-table">
             <thead>
                 <tr>
@@ -350,6 +390,7 @@ include('head.inc');
                 <?php endforeach; ?>
             </tbody>
         </table>
+        </div>
         <button type="button" id="add-peer" class="btn btn-default btn-sm">
             <i class="fa-solid fa-plus icon-embed-btn"></i><?= gettext('Добавить peer (резервный сервер)') ?>
         </button>

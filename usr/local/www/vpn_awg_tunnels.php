@@ -23,9 +23,14 @@ require_once('/usr/local/pkg/awg.inc');
 global $config;
 
 $pgtitle = [gettext('VPN'), gettext('AmneziaWG'), gettext('Туннели')];
-$shortcut_section = 'openvpn'; // используем ближайший релевантный раздел справки pfSense
 
 $tunnels = awg_get_tunnels();
+
+// включение отладочного вывода в логах.
+awg_debug('vpn_awg_tunnels.php: получено туннелей: ' . count($tunnels));
+if (!empty($tunnels)) {
+    awg_debug('Первый туннель: ' . print_r($tunnels[0], true));
+}
 
 /* ---------------------------------------------------------------------
  * Обработка действий: включение/выключение, удаление, применение
