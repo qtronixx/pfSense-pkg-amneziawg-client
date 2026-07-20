@@ -55,8 +55,8 @@ cmd_deploy_files() {
 
     cp "${REPO_ROOT}/etc/inc/priv/awg.priv.inc" /etc/inc/priv/awg.priv.inc
 
-    cp "${REPO_ROOT}/usr/local/etc/rc.d/awg.sh" /usr/local/etc/rc.d/awg.sh
-    chmod 555 /usr/local/etc/rc.d/awg.sh
+    cp "${REPO_ROOT}/usr/local/etc/rc.d/awg.sh" /usr/local/etc/rc.d/awg
+    chmod 555 /usr/local/etc/rc.d/awg
 
     # НОВОЕ: бинарники теперь входят в репозиторий (локально пропатченная
     # сборка awg - см. историю фикса MAX_AWG_STRING_LEN - официального
