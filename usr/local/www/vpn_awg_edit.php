@@ -12,6 +12,7 @@
  *     несрабатывающего сохранения.
  *   - Добавлено логирование через awg_debug() на каждом шаге обработки
  *     POST - для диагностики, почему сохранение не срабатывало.
+ *   - Добавлена обработка разбора
  * -----------------------------------------------------------------------
  */
 
@@ -79,6 +80,21 @@ if ($id !== null && isset($tunnels[$id])) {
     }
     if (isset($pconfig['peer']['pubkey'])) {
         $pconfig['peer'] = [$pconfig['peer']];
+    }
+}
+
+$parse_message = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['parse_conf'] ?? false)) {
+    $conf_text = (string)($_POST['conf_text'] ?? '');
+    if (trim($conf_text) === '') {
+        $parse_message = 'Вставьте текст конфигурации или выберите файл перед разбором.';
+    } else {
+        $parsed = awg_parse_conf($conf_text);
+        // Сохраняем имя/enabled/id как есть (не затираем данными из файла),
+        // остальное - из распознанного конфига.
+        $pconfig = array_merge($pconfig, $parsed);
+        awg_debug('Конфиг разобран из вставленного текста, найдено peer: ' . count($parsed['peer'] ?? []));
+        $parse_message = 'Конфигурация разобрана и подставлена в поля формы ниже. Проверьте значения и нажмите «Сохранить».';
     }
 }
 
@@ -200,6 +216,39 @@ include('head.inc');
 
 <form method="post" name="awgform" id="awgform" class="form-horizontal">
 <input type="hidden" name="id" value="<?= htmlspecialchars((string)($id ?? '')) ?>">
+
+<div class="panel panel-default">
+    <div class="panel-heading"><h2 class="panel-title"><?= gettext('Импорт из готового .conf файла') ?></h2></div>
+    <div class="panel-body">
+        <?php if (!empty($parse_message)): ?>
+            <div class="alert alert-info"><?= htmlspecialchars($parse_message) ?></div>
+        <?php endif; ?>
+
+        <div class="form-group">
+            <label class="col-sm-2 control-label"><?= gettext('Загрузить файл') ?></label>
+            <div class="col-sm-6">
+                <input type="file" id="conf_file_input" accept=".conf,.txt">
+                <span class="help-block small"><?= gettext('Или вставьте содержимое конфига прямо в поле ниже.') ?></span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label class="col-sm-2 control-label"><?= gettext('Текст конфигурации') ?></label>
+            <div class="col-sm-10">
+                <textarea class="form-control" id="conf_text" name="conf_text" rows="8"
+                          placeholder="[Interface]&#10;PrivateKey = ...&#10;...&#10;[Peer]&#10;PublicKey = ...&#10;Endpoint = ..."></textarea>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <div class="col-sm-offset-2 col-sm-10">
+                <button type="submit" name="parse_conf" value="1" class="btn btn-default">
+                    <i class="fa-solid fa-file-import icon-embed-btn"></i><?= gettext('Разобрать и заполнить форму') ?>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <div class="panel panel-default">
     <div class="panel-heading"><h2 class="panel-title"><?= gettext('Интерфейс') ?></h2></div>
@@ -423,6 +472,16 @@ document.querySelector('#peer-table').addEventListener('click', function (e) {
             e.target.closest('tr').remove();
         }
     }
+});
+
+document.getElementById('conf_file_input').addEventListener('change', function (e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (evt) {
+        document.getElementById('conf_text').value = evt.target.result;
+    };
+    reader.readAsText(file);
 });
 </script>
 

@@ -25,6 +25,7 @@
  *     применяет уже сохранённую в pfSense конфигурацию интерфейса.
  *   - НЕ подключаем services.inc - на 2.8.1 может требовать
  *     services_dhcp.inc, которого нет без пакета DHCP.
+ *   - Добавлен парсер файла для автоматической подставновки параметров
  *
  * ОГРАНИЧЕНИЕ: пакет работает ИСКЛЮЧИТЕЛЬНО как клиент внешнего
  * AmneziaWG-сервера. Каждый peer обязан иметь Endpoint.
@@ -641,4 +642,120 @@ function awg_deinstall(): void
 
     write_config('AmneziaWG Client: пакет удалён, меню и туннели очищены.');
     log_error('AmneziaWG Client: деинсталляция завершена.');
+}
+
+/*
+ * awg_parse_conf() - парсер нативного .conf-файла AmneziaWG (обратная
+ * функция к awg_build_conf()). Используется для импорта готового
+ * конфига через форму редактирования - пользователь вставляет текст
+ * или загружает файл, мы раскладываем его по полям формы.
+ *
+ * ВАЖНО: возвращает данные в ТОМ ЖЕ внутреннем формате, что использует
+ * форма/awg_save_tunnels() - в частности, I1-I5 кодируются через
+ * awg_encode_cps() (base64), т.к. именно так они хранятся в tunnels.json
+ * и ожидаются формой при повторном рендере (см. awg_decode_cps() при
+ * заполнении $pconfig из сохранённого туннеля).
+ */
+function awg_parse_conf(string $text): array
+{
+    $result = [
+        'privkey'    => '',
+        'address'    => '',
+        'address6'   => '',
+        'listenport' => '',
+        'dns'        => '',
+        'jc' => '', 'jmin' => '', 'jmax' => '',
+        's1' => '0', 's2' => '0', 's3' => '0', 's4' => '0',
+        'h1' => '', 'h2' => '', 'h3' => '', 'h4' => '',
+        'i1' => '', 'i2' => '', 'i3' => '', 'i4' => '', 'i5' => '',
+        'peer' => [],
+    ];
+
+    $section = null;
+    $current_peer = null;
+    $peers = [];
+
+    $lines = preg_split('/\r\n|\r|\n/', $text);
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#' || $line[0] === ';') {
+            continue;
+        }
+
+        if (preg_match('/^\[(\w+)\]$/', $line, $m)) {
+            $section = strtolower($m[1]);
+            if ($section === 'peer') {
+                if ($current_peer !== null) {
+                    $peers[] = $current_peer;
+                }
+                $current_peer = [
+                    'pubkey' => '', 'presharedkey' => '', 'endpoint' => '',
+                    'endpointport' => '51820', 'allowedips' => '0.0.0.0/0, ::/0',
+                    'keepalive' => '25',
+                ];
+            }
+            continue;
+        }
+
+        $eq = strpos($line, '=');
+        if ($eq === false) {
+            continue;
+        }
+        $key = strtolower(trim(substr($line, 0, $eq)));
+        $val = trim(substr($line, $eq + 1));
+
+        if ($section === 'interface') {
+            switch ($key) {
+                case 'privatekey':   $result['privkey']    = $val; break;
+                case 'address':      $result['address']    = $val; break;
+                case 'dns':          $result['dns']        = $val; break;
+                case 'listenport':   $result['listenport'] = $val; break;
+                case 'jc':           $result['jc']   = $val; break;
+                case 'jmin':         $result['jmin'] = $val; break;
+                case 'jmax':         $result['jmax'] = $val; break;
+                case 's1': case 's2': case 's3': case 's4':
+                    $result[$key] = $val;
+                    break;
+                case 'h1': case 'h2': case 'h3': case 'h4':
+                    $result[$key] = $val;
+                    break;
+                case 'i1': case 'i2': case 'i3': case 'i4': case 'i5':
+                    // Кодируем сразу в base64 - так хранятся в tunnels.json,
+                    // форма ожидает decode на выходе (см. awg_decode_cps в edit.php).
+                    $result[$key] = awg_encode_cps($val);
+                    break;
+                // mtu - намеренно игнорируем, см. комментарий в awg_build_conf()
+            }
+        } elseif ($section === 'peer' && $current_peer !== null) {
+            switch ($key) {
+                case 'publickey':
+                    $current_peer['pubkey'] = $val;
+                    break;
+                case 'presharedkey':
+                    $current_peer['presharedkey'] = $val;
+                    break;
+                case 'endpoint':
+                    $parts = explode(':', $val);
+                    $port = array_pop($parts);
+                    $current_peer['endpoint']     = implode(':', $parts); // на случай IPv6-хоста
+                    $current_peer['endpointport'] = $port;
+                    break;
+                case 'allowedips':
+                    $current_peer['allowedips'] = $val;
+                    break;
+                case 'persistentkeepalive':
+                    $current_peer['keepalive'] = $val;
+                    break;
+            }
+        }
+    }
+    if ($current_peer !== null) {
+        $peers[] = $current_peer;
+    }
+
+    if (!empty($peers)) {
+        $result['peer'] = $peers;
+    }
+
+    return $result;
 }
