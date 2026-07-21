@@ -4,19 +4,30 @@
  * -----------------------------------------------------------------------
  * Backend-библиотека пакета AmneziaWG Client для pfSense 2.8.1.
  *
- * АРХИТЕКТУРА: полностью userspace (amneziawg-go + amneziawg-tools),
- * без кернел-модуля. Установка/регистрация - через install.sh + прямую
- * запись в config.xml (awg_install()/awg_deinstall()), без зависимости
- * от FreeBSD pkg или install_package_xml()/info.xml - по образцу
- * pfSense-pkg-xray, подтверждено рабочим на реальном 2.8.1.
+ * ИТОГОВАЯ АРХИТЕКТУРА (после всех практических находок):
+ *   - Полностью userspace (amneziawg-go + amneziawg-tools), без
+ *     кернел-модуля - исходники ядра pfSense 2.8.x не публикуются.
+ *   - Установка/регистрация меню - через install.sh + awg_install(),
+ *     без FreeBSD pkg и без install_package_xml()/info.xml.
+ *   - Список ТУННЕЛЕЙ хранится в СОБСТВЕННОМ JSON-файле
+ *     (AWG_TUNNELS_FILE), а НЕ в config.xml - обнаружен воспроизводимый
+ *     баг: write_config()/config_write_file() в этой сборке pfSense
+ *     не сериализует вложенную структуру installedpackages/awgclient/
+ *     tunnels/tunnel ни через config_set_path(), ни через прямое
+ *     присвоение $GLOBALS['config'] - при этом простые записи
+ *     (installedpackages/menu, installedpackages/package) сохраняются
+ *     нормально, поэтому ИХ по-прежнему пишем через config_set_path().
+ *   - Адрес/MTU/gateway интерфейса НЕ назначаются этим кодом напрямую
+ *     через ifconfig inet - это конфликтовало с конфигурацией самого
+ *     pfSense (Interfaces -> AWGCLIENT -> Static IPv4) и ломало
+ *     NAT/gateway monitoring. Вместо этого после создания awg0
+ *     вызывается штатная interface_configure() pfSense, которая
+ *     применяет уже сохранённую в pfSense конфигурацию интерфейса.
+ *   - НЕ подключаем services.inc - на 2.8.1 может требовать
+ *     services_dhcp.inc, которого нет без пакета DHCP.
  *
- * ВАЖНО: НЕ подключаем services.inc - на pfSense 2.8.1 он может
- * требовать services_dhcp.inc, которого нет без установленного
- * DHCP-пакета (подтверждённый баг из отчётов пользователей
- * pfSense-pkg-xray). Ни одна функция из services.inc здесь не нужна.
- *
- * ОГРАНИЧЕНИЕ (клиентский режим): пакет работает ИСКЛЮЧИТЕЛЬНО как
- * клиент внешнего AmneziaWG-сервера. Каждый peer обязан иметь Endpoint.
+ * ОГРАНИЧЕНИЕ: пакет работает ИСКЛЮЧИТЕЛЬНО как клиент внешнего
+ * AmneziaWG-сервера. Каждый peer обязан иметь Endpoint.
  * -----------------------------------------------------------------------
  */
 
@@ -36,10 +47,22 @@ const AWG_GO_BIN       = '/usr/local/bin/amneziawg-go';
 const AWG_RUN_DIR      = '/var/run/amneziawg/';
 const AWG_UAPI_DIR     = '/var/run/amneziawg/';
 const AWG_TUNNELS_FILE = '/usr/local/etc/amnezia/amneziawg/tunnels.json';
-const AWG_DEBUG        = true; // выключить перед релизом
+const AWG_DEBUG        = true; // ВЫКЛЮЧИТЬ (false) перед боевым использованием
 
+/* --- Логирование/отладка --- */
+function awg_log_safe(string $v): string
+{
+    return str_replace(["\r", "\n"], ' ', $v);
+}
 
-// хелперы для кодировния неправельных строк I1-I5 как base64
+function awg_debug(string $msg): void
+{
+    if (AWG_DEBUG) {
+        log_error('AmneziaWG DEBUG: ' . awg_log_safe($msg));
+    }
+}
+
+/* --- Кодирование CPS-строк (I1-I5) для безопасного хранения --- */
 function awg_encode_cps(string $v): string
 {
     return $v === '' ? '' : base64_encode($v);
@@ -50,25 +73,9 @@ function awg_decode_cps(string $v): string
     return $v === '' ? '' : (string) base64_decode($v);
 }
 
-
-
-function awg_debug(string $msg): void
-{
-    if (AWG_DEBUG) {
-        log_error('AmneziaWG DEBUG: ' . awg_log_safe($msg));
-    }
-}
-
-/*
- * Убирает переводы строк из значений перед log_error() - защита от
- * log injection через пользовательские данные (имя туннеля, DNS и т.д.)
- */
-function awg_log_safe(string $v): string
-{
-    return str_replace(["\r", "\n"], ' ', $v);
-}
-
-/* --- Обёртки чтения/записи конфига (совместимость pfSense 2.8.x) --- */
+/* --- Обёртки для installedpackages/menu и installedpackages/package
+       (ЭТИ узлы по-прежнему пишутся через config.xml - подтверждено
+       рабочим; используются ТОЛЬКО в awg_install()/awg_deinstall()) --- */
 function awg_config_get_path(string $path, $default = null)
 {
     if (function_exists('config_get_path')) {
@@ -104,25 +111,7 @@ function awg_config_set_path(string $path, $value): void
     $ref[$last] = $value;
 }
 
-/* --- Работа со списком туннелей в config.xml --- */
-/*
- * ИЗМЕНЕНО (17.07.2026): туннели больше НЕ хранятся в config.xml.
- * Причина: обнаружен воспроизводимый баг - write_config()/
- * config_write_file() в этой сборке pfSense 2.8.1 не сериализует
- * нашу вложенную структуру installedpackages/awgclient/tunnels/tunnel
- * НИ ОДНИМ из способов (ни через config_set_path(), ни через прямое
- * присвоение $GLOBALS['config']), при этом простые плоские записи
- * (installedpackages/menu, installedpackages/package) сохраняются
- * штатно без проблем. Похоже на не диагностируемый снаружи баг
- * закрытой части сериализатора конфигурации применительно именно
- * к глубоко вложенным структурам с "тяжёлыми" строковыми полями
- * (base64-ключи, CPS-строки).
- *
- * Собственный JSON-файл полностью под нашим контролем, не зависит
- * от внутренней (непубличной) реализации config_write_file(), и
- * что важно - НЕ рискует триггерить защитный откат всего config.xml
- * pfSense на бэкап, как это происходило раньше.
- */
+/* --- Хранение туннелей в собственном JSON-файле --- */
 function awg_get_tunnels(): array
 {
     if (!file_exists(AWG_TUNNELS_FILE)) {
@@ -157,11 +146,7 @@ function awg_save_tunnels(array $tunnels): bool
     return true;
 }
 
-
-/*
- * Генерация ключей через stdin (не argv - не светится в ps/proc) и
- * без bashism <<< (не работает в /bin/sh на FreeBSD - там ash).
- */
+/* --- Генерация ключей: stdin, без bashism <<< --- */
 function awg_genkey(): array
 {
     $privkey = trim((string) shell_exec(escapeshellcmd(AWG_BIN) . ' genkey'));
@@ -188,10 +173,7 @@ function awg_genkey(): array
     return ['privkey' => $privkey, 'pubkey' => $pubkey];
 }
 
-/*
- * Защита от path traversal - строгая валидация имени интерфейса
- * ВНУТРИ функции, независимо от того, что делает GUI-форма.
- */
+/* --- Пути, с защитой от path traversal --- */
 function awg_conf_path(string $ifname): string
 {
     if (!preg_match('/^awg[0-9]{1,3}$/', $ifname)) {
@@ -199,24 +181,6 @@ function awg_conf_path(string $ifname): string
     }
     return AWG_CONF_DIR . $ifname . '.conf';
 }
-
-/*
- * Ищет "дружественное" имя интерфейса (opt1, wan, lan и т.п.) в
- * конфигурации pfSense по физическому имени устройства (awg0) -
- * нужно для interface_configure(), которая принимает именно
- * дружественное имя, а не системное.
- */
-function awg_find_pfsense_interface_name(string $ifname): ?string
-{
-    $interfaces = awg_config_get_path('interfaces', []);
-    foreach ($interfaces as $friendly => $entry) {
-        if (($entry['if'] ?? '') === $ifname) {
-            return $friendly;
-        }
-    }
-    return null;
-}
-
 
 function awg_pidfile(string $ifname): string
 {
@@ -234,8 +198,22 @@ function awg_uapi_sock(string $ifname): string
 }
 
 /*
- * Валидация обфускационных параметров AmneziaWG 2.0.
+ * Ищет "дружественное" имя интерфейса (opt1, wan, lan...) в
+ * конфигурации pfSense по физическому имени устройства (awg0) - нужно
+ * для interface_configure(), которая принимает дружественное имя.
  */
+function awg_find_pfsense_interface_name(string $ifname): ?string
+{
+    $interfaces = awg_config_get_path('interfaces', []);
+    foreach ($interfaces as $friendly => $entry) {
+        if (($entry['if'] ?? '') === $ifname) {
+            return $friendly;
+        }
+    }
+    return null;
+}
+
+/* --- Валидация обфускации AmneziaWG 2.0 --- */
 function awg_validate_obfuscation(array $t): array
 {
     $errors = [];
@@ -318,6 +296,12 @@ function awg_validate_obfuscation(array $t): array
     return $errors;
 }
 
+/*
+ * Генерация .conf-файла для awg setconf.
+ * ВАЖНО: MTU здесь НЕ пишется - awg не понимает это поле в файле
+ * ("Line unrecognized: `MTU=1420'"), MTU применяется отдельно через
+ * pfSense (Interfaces -> AWGCLIENT -> MTU) + interface_configure().
+ */
 function awg_build_conf(array $t): string
 {
     $lines   = [];
@@ -344,11 +328,10 @@ function awg_build_conf(array $t): string
     foreach (['i1', 'i2', 'i3', 'i4', 'i5'] as $key) {
         $val = awg_decode_cps(trim((string)($t[$key] ?? '')));
         if ($val !== '') {
-        $lines[] = strtoupper($key) . ' = ' . $val;
+            $lines[] = strtoupper($key) . ' = ' . $val;
+        }
     }
-}
 
-    
     $lines[] = '';
 
     $peers = $t['peer'] ?? [];
@@ -397,10 +380,8 @@ function awg_write_conf(array $t): bool
 }
 
 /*
- * awg_up() - поднимает туннель через userspace-демон amneziawg-go.
- * setconf с retry (защита от гонки после ожидания UAPI-сокета),
- * маршруты под AllowedIPs записываются в *.routes для корректной
- * очистки в awg_down().
+ * awg_up() - поднимает туннель. Адрес/MTU/gateway - НЕ отсюда, а через
+ * interface_configure() (см. шапку файла).
  */
 function awg_up(array $t): array
 {
@@ -449,30 +430,20 @@ function awg_up(array $t): array
 
     mwexec('/sbin/ifconfig ' . escapeshellarg($ifname) . ' up', true);
 
-    /*
-    * ИЗМЕНЕНО (найдена архитектурная проблема на практике 18.07.2026):
-    * адрес/MTU/gateway больше НЕ назначаются нашим кодом напрямую через
-    * ifconfig - это создавало конфликт с конфигурацией самого pfSense
-    * (Interfaces -> AWGCLIENT -> Static IPv4), которая применяется
-    * только при Save на странице интерфейса, а не при каждом
-    * пересоздании awg0 нашим скриптом. Вместо этого просим сам pfSense
-    * применить СВОЮ, уже сохранённую конфигурацию к только что
-    * созданному устройству - через штатную interface_configure().
-    * Это единый источник истины: адрес настраивается в Interfaces GUI,
-    * а не в нашей форме.
-    */
+    // Адрес/MTU/gateway - через штатный pfSense, единый источник истины.
     $friendly = awg_find_pfsense_interface_name($ifname);
     if ($friendly !== null) {
         if (function_exists('interface_configure')) {
             interface_configure($friendly, true);
             awg_debug("interface_configure({$friendly}) вызван для применения адреса/gateway из настроек pfSense.");
         } else {
-            log_error("AmneziaWG: функция interface_configure() недоступна - адрес нужно назначить вручную через Interfaces GUI.");
+            log_error("AmneziaWG: функция interface_configure() недоступна - адрес нужно назначить вручную.");
         }
     } else {
-        log_error("AmneziaWG: интерфейс {$ifname} ещё не назначен в Interfaces -> Assignments - адрес не будет применён автоматически до назначения.");
+        log_error("AmneziaWG: интерфейс {$ifname} ещё не назначен в Interfaces -> Assignments - адрес не будет применён автоматически.");
     }
 
+    // Маршруты под AllowedIPs (только split-tunnel, не 0.0.0.0/0 - см. шапку).
     $peers = $t['peer'] ?? [];
     if (isset($peers['pubkey'])) {
         $peers = [$peers];
@@ -499,7 +470,6 @@ function awg_up(array $t): array
         file_put_contents(awg_routesfile($ifname), implode("\n", $routes_added));
     }
 
-
     if (!empty($t['dns'])) {
         awg_apply_dns($ifname, $t['dns']);
     }
@@ -508,8 +478,8 @@ function awg_up(array $t): array
 }
 
 /*
- * awg_down() - удаляет маршруты, добавленные в awg_up(), останавливает
- * процесс amneziawg-go. Guard на отсутствие расширения posix.
+ * awg_down() - с fallback через pgrep на случай потери pid-файла
+ * (найденная на практике проблема с "зомби"-процессами).
  */
 function awg_down(array $t, bool $silent = false): void
 {
@@ -530,11 +500,6 @@ function awg_down(array $t, bool $silent = false): void
         @unlink($pidfile);
     }
 
-    // Fallback: если pid-файла не было/устарел - находим процесс
-    // amneziawg-go для ЭТОГО конкретного интерфейса по аргументам
-    // командной строки напрямую через pgrep. Защита от "зомби"-
-    // процессов, оставшихся без pid-файла (найденная на практике
-    // проблема 17.07.2026).
     if (!$killed) {
         $out = [];
         exec('/bin/pgrep -f ' . escapeshellarg('amneziawg-go ' . $ifname), $out);
@@ -548,8 +513,6 @@ function awg_down(array $t, bool $silent = false): void
             usleep(500000);
         }
     }
-
-    // ... остальной код (маршруты, ifconfig destroy) без изменений ...
 
     $routes_file = awg_routesfile($ifname);
     if (file_exists($routes_file)) {
@@ -593,9 +556,9 @@ function awg_sync_all(): void
 }
 
 /*
- * awg_install()/awg_deinstall() - самодостаточная регистрация в
- * config.xml, БЕЗ зависимости от install_package_xml()/info.xml.
- * Вызывается из install.sh, а не из pkg-хуков.
+ * awg_install()/awg_deinstall() - самодостаточная регистрация ТОЛЬКО
+ * менюшки и записи о пакете (это работает через config.xml надёжно).
+ * Туннели сюда не относятся - они в JSON.
  */
 function awg_install(): void
 {
@@ -644,7 +607,6 @@ function awg_install(): void
     }
 
     $ok = write_config('AmneziaWG Client: пакет установлен, меню зарегистрировано.');
-    
     if ($ok === false) {
         log_error('AmneziaWG Client: КРИТИЧНО - не удалось записать config.xml при установке.');
     }
