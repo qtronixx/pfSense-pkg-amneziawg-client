@@ -2,16 +2,16 @@
 /*
  * vpn_awg_tunnels.php
  * -----------------------------------------------------------------------
- * Главная страница пакета: список настроенных клиентских туннелей
- * AmneziaWG, с возможностью включить/выключить, удалить, применить
- * изменения и перейти к статусу.
- *
- * Совместимость с pfSense 2.8.1 (п.2 ТЗ):
- *   - подключение через $pgtitle/require_once('guiconfig.inc') в
- *     актуальном для 2.8.x стиле (Bootstrap 5 layout, без legacy
- *     табличных вёрсток вручную - используется штатный класс
- *     "table table-striped table-hover table-responsive").
- *   - strict_types и явные приведения типов под PHP 8.2.
+ * ИСПРАВЛЕНИЯ:
+ *   - Действия toggle/del/apply переведены с GET-ссылок на POST-формы -
+ *     GET-запросы для мутирующих операций уязвимы к CSRF (администратор
+ *     мог случайно "кликнуть" вредоносную ссылку и удалить/перезапустить
+ *     туннель). pfSense автоматически добавляет CSRF-токен во все
+ *     POST-формы через встроенный csrf-magic - для этого не нужно
+ *     ничего делать вручную, достаточно использовать <form method="post">.
+ *   - $id теперь строго проверяется через ctype_digit() перед приведением
+ *     к int - раньше ?act=del&id=abc молча превращался в id=0 и мог
+ *     удалить не тот туннель.
  * -----------------------------------------------------------------------
  */
 
@@ -25,18 +25,21 @@ global $config;
 $pgtitle = [gettext('VPN'), gettext('AmneziaWG'), gettext('Туннели')];
 
 $tunnels = awg_get_tunnels();
-
-// включение отладочного вывода в логах.
 awg_debug('vpn_awg_tunnels.php: получено туннелей: ' . count($tunnels));
-if (!empty($tunnels)) {
-    awg_debug('Первый туннель: ' . print_r($tunnels[0], true));
-}
 
 /* ---------------------------------------------------------------------
- * Обработка действий: включение/выключение, удаление, применение
+ * Обработка действий: только через POST, с валидацией id
  * --------------------------------------------------------------------- */
-$act = $_REQUEST['act'] ?? '';
-$id  = isset($_REQUEST['id']) ? (int)$_REQUEST['id'] : null;
+$act = '';
+$id  = null;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $act = (string)($_POST['act'] ?? '');
+    $raw_id = (string)($_POST['id'] ?? '');
+    if (ctype_digit($raw_id)) {
+        $id = (int)$raw_id;
+    }
+}
 
 if ($act === 'toggle' && $id !== null && isset($tunnels[$id])) {
     $tunnels[$id]['enabled'] = empty($tunnels[$id]['enabled']) ? '1' : '';
@@ -46,8 +49,6 @@ if ($act === 'toggle' && $id !== null && isset($tunnels[$id])) {
 }
 
 if ($act === 'del' && $id !== null && isset($tunnels[$id])) {
-    // Перед удалением записи из конфига - аккуратно опускаем интерфейс,
-    // чтобы не оставить "висящий" awgN в системе.
     awg_down($tunnels[$id], true);
     @unlink(awg_conf_path($tunnels[$id]['name']));
     unset($tunnels[$id]);
@@ -115,14 +116,18 @@ include('head.inc');
                 ?>
                 <tr>
                     <td>
-                        <a href="?act=toggle&amp;id=<?= $i ?>"
-                           onclick="return confirm('<?= gettext('Изменить статус включения этого туннеля?') ?>');">
-                            <?php if (!empty($t['enabled'])): ?>
-                                <i class="fa-solid fa-square-check text-success" title="<?= gettext('Включен') ?>"></i>
-                            <?php else: ?>
-                                <i class="fa-regular fa-square text-muted" title="<?= gettext('Выключен') ?>"></i>
-                            <?php endif; ?>
-                        </a>
+                        <form method="post" style="display:inline">
+                            <input type="hidden" name="act" value="toggle">
+                            <input type="hidden" name="id" value="<?= (int)$i ?>">
+                            <button type="submit" class="btn btn-link" style="padding:0;border:0;"
+                                    onclick="return confirm('<?= gettext('Изменить статус включения этого туннеля?') ?>');">
+                                <?php if (!empty($t['enabled'])): ?>
+                                    <i class="fa-solid fa-square-check text-success" title="<?= gettext('Включен') ?>"></i>
+                                <?php else: ?>
+                                    <i class="fa-regular fa-square text-muted" title="<?= gettext('Выключен') ?>"></i>
+                                <?php endif; ?>
+                            </button>
+                        </form>
                     </td>
                     <td>
                         <?= htmlspecialchars($t['name']) ?>
@@ -143,12 +148,16 @@ include('head.inc');
                     <td>
                         <a class="fa-solid fa-pencil"
                            title="<?= gettext('Редактировать') ?>"
-                           href="vpn_awg_edit.php?id=<?= $i ?>"></a>
+                           href="vpn_awg_edit.php?id=<?= (int)$i ?>"></a>
                         &nbsp;
-                        <a class="fa-solid fa-trash-can text-danger"
-                           title="<?= gettext('Удалить') ?>"
-                           href="?act=del&amp;id=<?= $i ?>"
-                           onclick="return confirm('<?= gettext('Удалить туннель безвозвратно?') ?>');"></a>
+                        <form method="post" style="display:inline">
+                            <input type="hidden" name="act" value="del">
+                            <input type="hidden" name="id" value="<?= (int)$i ?>">
+                            <button type="submit" class="btn btn-link text-danger" style="padding:0;border:0;"
+                                    onclick="return confirm('<?= gettext('Удалить туннель безвозвратно?') ?>');">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        </form>
                     </td>
                 </tr>
                 <?php endforeach; ?>
@@ -159,9 +168,12 @@ include('head.inc');
             <a href="vpn_awg_edit.php" class="btn btn-success">
                 <i class="fa-solid fa-plus icon-embed-btn"></i><?= gettext('Добавить туннель') ?>
             </a>
-            <a href="?act=apply" class="btn btn-primary">
-                <i class="fa-solid fa-check icon-embed-btn"></i><?= gettext('Применить изменения') ?>
-            </a>
+            <form method="post" style="display:inline">
+                <input type="hidden" name="act" value="apply">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fa-solid fa-check icon-embed-btn"></i><?= gettext('Применить изменения') ?>
+                </button>
+            </form>
             <a href="vpn_awg_status.php" class="btn btn-info">
                 <i class="fa-solid fa-signal icon-embed-btn"></i><?= gettext('Статус подключений') ?>
             </a>
