@@ -15,6 +15,7 @@
 declare(strict_types=1);
 
 require_once('util.inc');
+require_once('/usr/local/pkg/awg.inc');
 
 function awg_validate_tunnel_form(array $pconfig): array
 {

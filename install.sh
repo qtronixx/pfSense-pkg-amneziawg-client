@@ -36,7 +36,7 @@ fi
 
 cmd_deploy_files() {
     info "Копирование файлов пакета..."
-
+    
     mkdir -p /usr/local/pkg
     mkdir -p /usr/local/www/widgets/widgets
     mkdir -p /usr/local/etc/rc.d
@@ -57,6 +57,9 @@ cmd_deploy_files() {
 
     cp "${REPO_ROOT}/usr/local/etc/rc.d/awg.sh" /usr/local/etc/rc.d/awg
     chmod 555 /usr/local/etc/rc.d/awg
+
+    # сохраняет текущее поведение (debug включён по умолчанию, пока проект тестируется), но переживает update, и уже готовит почву под будущий чекбокс в GUI.
+    [ -f /usr/local/etc/amnezia/amneziawg/debug.enabled ] || touch /usr/local/etc/amnezia/amneziawg/debug.enabled
 
     # НОВОЕ: бинарники теперь входят в репозиторий (локально пропатченная
     # сборка awg - см. историю фикса MAX_AWG_STRING_LEN - официального
@@ -139,7 +142,7 @@ cmd_remove_files() {
     rm -f /usr/local/www/vpn_awg_tunnels.php /usr/local/www/vpn_awg_edit.php /usr/local/www/vpn_awg_status.php
     rm -f /usr/local/www/widgets/widgets/awg_status.widget.php /usr/local/www/widgets/widgets/awg_status.xml
     rm -f /etc/inc/priv/awg.priv.inc
-    rm -f /usr/local/etc/rc.d/awg.sh
+    rm -f /usr/local/etc/rc.d/awg
     ok "Файлы удалены"
 }
 
@@ -150,8 +153,7 @@ case "${COMMAND}" in
         cmd_register
         echo ""
         info "Установка завершена!"
-        echo "  1. Убедитесь, что /usr/local/bin/amneziawg-go и /usr/local/bin/awg на месте"
-        echo "     (scripts/install_binaries.sh, если ещё не установлены)"
+        echo "  1. Бинарники amneziawg-go/awg уже установлены из bin/ репозитория"
         echo "  2. Откройте VPN -> AmneziaWG в веб-интерфейсе"
         ;;
     update)

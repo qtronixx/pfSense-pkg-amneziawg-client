@@ -24,8 +24,7 @@
 <packagegui>
     <copyright>
         Copyright (C) 2026, AmneziaWG Client for pfSense 2.8.1
-        client-only build. Licensed under Apache 2.0 (naследует
-        лицензию upstream AmneziaWG/WireGuard tools).
+        client-only build. Licensed under Licensed under MIT (see LICENSE file).
     </copyright>
 
     <name>awg</name>
@@ -79,8 +78,8 @@
         custom_php_deinstall_command вызываются Package Manager'ом
         при установке/удалении - здесь дергаем функции из awg.inc.
     -->
-    <custom_php_install_command>awg_install_hook</custom_php_install_command>
-    <custom_php_deinstall_command>awg_deinstall_hook</custom_php_deinstall_command>
+    <custom_php_install_command>awg_install</custom_php_install_command>
+    <custom_php_deinstall_command>awg_deinstall</custom_php_deinstall_command>
     <custom_php_resync_config_command>awg_sync_all</custom_php_resync_config_command>
 
 </packagegui>

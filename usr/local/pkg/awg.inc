@@ -48,7 +48,22 @@ const AWG_GO_BIN       = '/usr/local/bin/amneziawg-go';
 const AWG_RUN_DIR      = '/var/run/amneziawg/';
 const AWG_UAPI_DIR     = '/var/run/amneziawg/';
 const AWG_TUNNELS_FILE = '/usr/local/etc/amnezia/amneziawg/tunnels.json';
-const AWG_DEBUG        = true; // ВЫКЛЮЧИТЬ (false) перед боевым использованием
+const AWG_DEBUG        = '/usr/local/etc/amnezia/amneziawg/debug.enabled';
+const AWG_SETCONF_RETRY_COUNT    = 3;
+const AWG_SETCONF_RETRY_DELAY_US = 300000;
+
+function awg_debug_enabled(): bool
+{
+    return file_exists(AWG_DEBUG_FLAG_FILE);
+}
+
+function awg_debug(string $msg): void
+{
+    if (awg_debug_enabled()) {
+        log_error('AmneziaWG DEBUG: ' . awg_log_safe($msg));
+    }
+}
+
 
 /* --- Логирование/отладка --- */
 function awg_log_safe(string $v): string
@@ -119,7 +134,16 @@ function awg_get_tunnels(): array
         return [];
     }
     $raw = file_get_contents(AWG_TUNNELS_FILE);
+    if ($raw === false || trim($raw) === '') {
+        return [];
+    }
     $data = json_decode($raw, true);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        log_error('AmneziaWG Client: КРИТИЧНО - tunnels.json повреждён (' . json_last_error_msg() . '). ' .
+                   'Возвращён пустой список для GUI, но файл на диске НЕ был перезаписан. ' .
+                   'Проверьте ' . AWG_TUNNELS_FILE . ' и ' . AWG_TUNNELS_FILE . '.bak вручную.');
+        return [];
+    }
     return is_array($data) ? $data : [];
 }
 
@@ -128,20 +152,37 @@ function awg_save_tunnels(array $tunnels): bool
     if (!is_dir(dirname(AWG_TUNNELS_FILE))) {
         mkdir(dirname(AWG_TUNNELS_FILE), 0700, true);
     }
+
+    if (file_exists(AWG_TUNNELS_FILE)) {
+        @copy(AWG_TUNNELS_FILE, AWG_TUNNELS_FILE . '.bak');
+    }
+
     $json = json_encode($tunnels, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
     if ($json === false) {
         log_error('AmneziaWG Client: КРИТИЧНО - не удалось сериализовать туннели в JSON: ' . json_last_error_msg());
         return false;
     }
-    $tmp = AWG_TUNNELS_FILE . '.' . getmypid();
-    if (@file_put_contents($tmp, $json) === false) {
-        log_error('AmneziaWG Client: КРИТИЧНО - не удалось записать временный файл туннелей.');
+
+    $lock = fopen(AWG_TUNNELS_FILE . '.lock', 'c');
+    if ($lock === false) {
+        log_error('AmneziaWG Client: КРИТИЧНО - не удалось создать lock-файл для записи туннелей.');
         return false;
     }
-    @chmod($tmp, 0600);
-    if (!rename($tmp, AWG_TUNNELS_FILE)) {
+    flock($lock, LOCK_EX);
+
+    $tmp = AWG_TUNNELS_FILE . '.' . getmypid();
+    $write_ok = @file_put_contents($tmp, $json) !== false;
+    if ($write_ok) {
+        @chmod($tmp, 0600);
+        $write_ok = rename($tmp, AWG_TUNNELS_FILE);
+    }
+
+    flock($lock, LOCK_UN);
+    fclose($lock);
+
+    if (!$write_ok) {
         @unlink($tmp);
-        log_error('AmneziaWG Client: КРИТИЧНО - не удалось переименовать временный файл туннелей.');
+        log_error('AmneziaWG Client: КРИТИЧНО - не удалось записать tunnels.json.');
         return false;
     }
     return true;
@@ -157,7 +198,7 @@ function awg_genkey(): array
 
     $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
     $proc = proc_open(escapeshellcmd(AWG_BIN) . ' pubkey', $descriptors, $pipes);
-    if (!is_resource($proc)) {
+    if (if ($proc === false)) {
         return ['error' => 'Не удалось запустить ' . AWG_BIN . ' pubkey'];
     }
     fwrite($pipes[0], $privkey . "\n");
@@ -167,8 +208,14 @@ function awg_genkey(): array
     fclose($pipes[2]);
     proc_close($proc);
 
+    $pubkey = trim((string) stream_get_contents($pipes[1]));
+    fclose($pipes[1]);
+    $stderr = trim((string) stream_get_contents($pipes[2]));
+    fclose($pipes[2]);
+    proc_close($proc);
+
     if ($pubkey === '') {
-        return ['error' => 'awg pubkey не вернул результат'];
+        return ['error' => 'awg pubkey не вернул результат' . ($stderr !== '' ? (': ' . $stderr) : '')];
     }
 
     return ['privkey' => $privkey, 'pubkey' => $pubkey];
@@ -418,9 +465,9 @@ function awg_up(array $t): array
 
     $out = [];
     $rc  = 1;
-    for ($attempt = 0; $attempt < 3 && $rc !== 0; $attempt++) {
+    for ($attempt = 0; $attempt < AWG_SETCONF_RETRY_COUNT && $rc !== 0; $attempt++) {
         if ($attempt > 0) {
-            usleep(300000);
+            usleep(AWG_SETCONF_RETRY_DELAY_US);
         }
         $out = [];
         exec(escapeshellcmd(AWG_BIN) . ' setconf ' . escapeshellarg($ifname) . ' ' . escapeshellarg($conf) . ' 2>&1', $out, $rc);
@@ -457,8 +504,8 @@ function awg_up(array $t): array
                 continue;
             }
             if ($cidr === '0.0.0.0/0' || $cidr === '::/0') {
-                log_error("AmneziaWG: " . awg_log_safe($ifname) . " peer имеет full-tunnel AllowedIPs ({$cidr}) - " .
-                           "настройте gateway и policy routing штатно через GUI pfSense.");
+                log_error("AmneziaWG: " . awg_log_safe($ifname) . " peer имеет full-tunnel AllowedIPs (" . awg_log_safe($cidr) . ") - " .
+                            "настройте gateway и policy routing штатно через GUI pfSense.");
                 continue;
             }
             $isv6 = strpos($cidr, ':') !== false;
@@ -467,8 +514,12 @@ function awg_up(array $t): array
             $routes_added[] = ($isv6 ? '6' : '4') . ':' . $cidr;
         }
     }
-    if (!empty($routes_added)) {
-        file_put_contents(awg_routesfile($ifname), implode("\n", $routes_added));
+    if (!empty($routes_added)){
+        $routes_written = @file_put_contents(awg_routesfile($ifname), implode("\n", $routes_added));
+        if ($routes_written === false) {
+            log_error("AmneziaWG: КРИТИЧНО - не удалось записать {$ifname}.routes - при следующем awg_down() " .
+                       "маршруты НЕ будут удалены автоматически, потребуется ручная очистка через route delete.");
+        }
     }
 
     if (!empty($t['dns'])) {
@@ -502,7 +553,7 @@ function awg_down(array $t, bool $silent = false): void
     }
 
     if (!$killed) {
-        $out = [];
+      $out = [];
         exec('/bin/pgrep -f ' . escapeshellarg('amneziawg-go ' . $ifname), $out);
         foreach ($out as $pid) {
             $pid = (int) trim($pid);
@@ -511,7 +562,15 @@ function awg_down(array $t, bool $silent = false): void
             }
         }
         if (!empty($out)) {
-            usleep(500000);
+            usleep(1000000);
+            $still = [];
+            exec('/bin/pgrep -f ' . escapeshellarg('amneziawg-go ' . $ifname), $still);
+            foreach ($still as $pid) {
+                $pid = (int) trim($pid);
+                if ($pid > 0) {
+                    mwexec('/bin/kill -9 ' . escapeshellarg((string)$pid), true);
+                }
+            }
         }
     }
 
@@ -546,12 +605,21 @@ function awg_sync_all(): void
 {
     foreach (awg_get_tunnels() as $t) {
         if (empty($t['enabled'])) {
-            awg_down($t, true);
+            try {
+                awg_down($t, true);
+            } catch (Throwable $e) {
+                log_error('AmneziaWG: ошибка awg_down() для ' . awg_log_safe($t['name'] ?? '?') . ': ' . awg_log_safe($e->getMessage()));
+            }
             continue;
         }
-        $result = awg_up($t);
-        if (empty($result['ok'])) {
-            log_error('AmneziaWG: ошибка поднятия туннеля ' . awg_log_safe($t['name']) . ': ' . awg_log_safe($result['error'] ?? 'неизвестная ошибка'));
+        try {
+            $result = awg_up($t);
+            if (empty($result['ok'])) {
+                log_error('AmneziaWG: ошибка поднятия туннеля ' . awg_log_safe($t['name']) . ': ' . awg_log_safe($result['error'] ?? 'неизвестная ошибка'));
+            }
+        } catch (Throwable $e) {
+            log_error('AmneziaWG: КРИТИЧНО - исключение при поднятии туннеля ' . awg_log_safe($t['name'] ?? '?') .
+                       ': ' . awg_log_safe($e->getMessage()) . ' - остальные туннели продолжают обрабатываться.');
         }
     }
 }
@@ -739,10 +807,18 @@ function awg_parse_conf(string $text): array
                     $current_peer['presharedkey'] = $val;
                     break;
                 case 'endpoint':
-                    $parts = explode(':', $val);
-                    $port = array_pop($parts);
-                    $current_peer['endpoint']     = implode(':', $parts); // на случай IPv6-хоста
-                    $current_peer['endpointport'] = $port;
+                    $val_trim = trim($val);
+                    $last_colon = strrpos($val_trim, ':');
+                    if ($last_colon !== false && ctype_digit(substr($val_trim, $last_colon + 1))) {
+                        $current_peer['endpoint']     = substr($val_trim, 0, $last_colon);
+                        $current_peer['endpointport'] = substr($val_trim, $last_colon + 1);
+                    } else {
+                        // Порт не указан явно в Endpoint - оставляем текущий/дефолтный,
+                        // весь Endpoint трактуем как хост (защита от бага, найденного
+                        // в ревью: раньше IP без порта становился портом).
+                        $current_peer['endpoint']     = $val_trim;
+                        $current_peer['endpointport'] = $current_peer['endpointport'] ?: '51820';
+                    }   
                     break;
                 case 'allowedips':
                     $current_peer['allowedips'] = $val;

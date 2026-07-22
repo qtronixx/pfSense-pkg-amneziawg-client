@@ -39,7 +39,8 @@ function awg_next_free_name(): string
 }
 
 $tunnels = awg_get_tunnels();
-$id = isset($_REQUEST['id']) ? (int)$_REQUEST['id'] : null;
+$raw_id = (string)($_REQUEST['id'] ?? '');
+$id = ctype_digit($raw_id) ? (int)$raw_id : null;
 
 $pconfig = [
     'name'        => awg_next_free_name(),
@@ -485,6 +486,12 @@ document.querySelector('#peer-table').addEventListener('click', function (e) {
 document.getElementById('conf_file_input').addEventListener('change', function (e) {
     var file = e.target.files[0];
     if (!file) return;
+    var MAX_SIZE = 65536; // 64 КБ - с большим запасом для .conf-файла
+    if (file.size > MAX_SIZE) {
+        alert('Файл слишком большой для конфигурации AmneziaWG (' + Math.round(file.size / 1024) + ' КБ). Проверьте, что выбран правильный файл.');
+        e.target.value = '';
+        return;
+    }
     var reader = new FileReader();
     reader.onload = function (evt) {
         document.getElementById('conf_text').value = evt.target.result;
