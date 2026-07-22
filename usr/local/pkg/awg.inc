@@ -48,22 +48,12 @@ const AWG_GO_BIN       = '/usr/local/bin/amneziawg-go';
 const AWG_RUN_DIR      = '/var/run/amneziawg/';
 const AWG_UAPI_DIR     = '/var/run/amneziawg/';
 const AWG_TUNNELS_FILE = '/usr/local/etc/amnezia/amneziawg/tunnels.json';
-const AWG_DEBUG        = '/usr/local/etc/amnezia/amneziawg/debug.enabled';
+// ИСПРАВЛЕНО: была AWG_DEBUG, но awg_debug_enabled() ссылался на
+// AWG_DEBUG_FLAG_FILE - несовпадение имени константы. Переименовано
+// в AWG_DEBUG_FLAG_FILE везде для консистентности.
+const AWG_DEBUG_FLAG_FILE = '/usr/local/etc/amnezia/amneziawg/debug.enabled';
 const AWG_SETCONF_RETRY_COUNT    = 3;
 const AWG_SETCONF_RETRY_DELAY_US = 300000;
-
-function awg_debug_enabled(): bool
-{
-    return file_exists(AWG_DEBUG_FLAG_FILE);
-}
-
-function awg_debug(string $msg): void
-{
-    if (awg_debug_enabled()) {
-        log_error('AmneziaWG DEBUG: ' . awg_log_safe($msg));
-    }
-}
-
 
 /* --- Логирование/отладка --- */
 function awg_log_safe(string $v): string
@@ -71,9 +61,20 @@ function awg_log_safe(string $v): string
     return str_replace(["\r", "\n"], ' ', $v);
 }
 
+function awg_debug_enabled(): bool
+{
+    return file_exists(AWG_DEBUG_FLAG_FILE);
+}
+
+/*
+ * ИСПРАВЛЕНО: функция awg_debug() была объявлена дважды (фатальная
+ * ошибка "Cannot redeclare function") - оставлена только одна версия,
+ * использующая awg_debug_enabled() (флаг-файл, переживает install.sh
+ * update, в отличие от захардкоженной константы true/false).
+ */
 function awg_debug(string $msg): void
 {
-    if (AWG_DEBUG) {
+    if (awg_debug_enabled()) {
         log_error('AmneziaWG DEBUG: ' . awg_log_safe($msg));
     }
 }
@@ -188,7 +189,15 @@ function awg_save_tunnels(array $tunnels): bool
     return true;
 }
 
-/* --- Генерация ключей: stdin, без bashism <<< --- */
+/*
+ * Генерация ключей через stdin (не argv - не светится в ps/proc) и
+ * без bashism <<< (не работает в /bin/sh на FreeBSD - там ash).
+ *
+ * ИСПРАВЛЕНО: было "if (if ($proc === false))" - двойной if,
+ * синтаксическая ошибка. Также убран дублирующийся блок чтения
+ * $pipes[1]/$pipes[2] - раньше пайпы читались и закрывались дважды
+ * (второе чтение уже закрытых дескрипторов).
+ */
 function awg_genkey(): array
 {
     $privkey = trim((string) shell_exec(escapeshellcmd(AWG_BIN) . ' genkey'));
@@ -198,15 +207,11 @@ function awg_genkey(): array
 
     $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
     $proc = proc_open(escapeshellcmd(AWG_BIN) . ' pubkey', $descriptors, $pipes);
-    if (if ($proc === false)) {
+    if ($proc === false) {
         return ['error' => 'Не удалось запустить ' . AWG_BIN . ' pubkey'];
     }
     fwrite($pipes[0], $privkey . "\n");
     fclose($pipes[0]);
-    $pubkey = trim((string) stream_get_contents($pipes[1]));
-    fclose($pipes[1]);
-    fclose($pipes[2]);
-    proc_close($proc);
 
     $pubkey = trim((string) stream_get_contents($pipes[1]));
     fclose($pipes[1]);
@@ -473,7 +478,7 @@ function awg_up(array $t): array
         exec(escapeshellcmd(AWG_BIN) . ' setconf ' . escapeshellarg($ifname) . ' ' . escapeshellarg($conf) . ' 2>&1', $out, $rc);
     }
     if ($rc !== 0) {
-        return ['ok' => false, 'error' => 'awg setconf (после 3 попыток): ' . implode("\n", $out)];
+        return ['ok' => false, 'error' => 'awg setconf (после ' . AWG_SETCONF_RETRY_COUNT . ' попыток): ' . implode("\n", $out)];
     }
 
     mwexec('/sbin/ifconfig ' . escapeshellarg($ifname) . ' up', true);
@@ -514,7 +519,7 @@ function awg_up(array $t): array
             $routes_added[] = ($isv6 ? '6' : '4') . ':' . $cidr;
         }
     }
-    if (!empty($routes_added)){
+    if (!empty($routes_added)) {
         $routes_written = @file_put_contents(awg_routesfile($ifname), implode("\n", $routes_added));
         if ($routes_written === false) {
             log_error("AmneziaWG: КРИТИЧНО - не удалось записать {$ifname}.routes - при следующем awg_down() " .
@@ -553,7 +558,7 @@ function awg_down(array $t, bool $silent = false): void
     }
 
     if (!$killed) {
-      $out = [];
+        $out = [];
         exec('/bin/pgrep -f ' . escapeshellarg('amneziawg-go ' . $ifname), $out);
         foreach ($out as $pid) {
             $pid = (int) trim($pid);
@@ -718,11 +723,9 @@ function awg_deinstall(): void
  * конфига через форму редактирования - пользователь вставляет текст
  * или загружает файл, мы раскладываем его по полям формы.
  *
- * ВАЖНО: возвращает данные в ТОМ ЖЕ внутреннем формате, что использует
- * форма/awg_save_tunnels() - в частности, I1-I5 кодируются через
- * awg_encode_cps() (base64), т.к. именно так они хранятся в tunnels.json
- * и ожидаются формой при повторном рендере (см. awg_decode_cps() при
- * заполнении $pconfig из сохранённого туннеля).
+ * ВАЖНО: возвращает I1-I5 ЧИТАЕМЫМ текстом (та же конвенция, что и у
+ * $pconfig везде в форме) - кодирование в base64 происходит один раз,
+ * непосредственно при формировании $entry перед awg_save_tunnels().
  */
 function awg_parse_conf(string $text): array
 {
@@ -788,12 +791,6 @@ function awg_parse_conf(string $text): array
                     $result[$key] = $val;
                     break;
                 case 'i1': case 'i2': case 'i3': case 'i4': case 'i5':
-                    // ВАЖНО: НЕ кодируем здесь. $pconfig всегда хранит ЧИТАЕМЫЙ текст
-                    // I1-I5 (та же конвенция, что и при загрузке существующего туннеля
-                    // через awg_decode_cps() в vpn_awg_edit.php) - кодирование в base64
-                    // происходит один раз, непосредственно в момент awg_save_tunnels()
-                    // при формировании $entry. Если кодировать уже здесь, повторное
-                    // awg_encode_cps() при сохранении задвоило бы кодировку.
                     $result[$key] = $val;
                     break;
                 // mtu - намеренно игнорируем, см. комментарий в awg_build_conf()
@@ -814,11 +811,11 @@ function awg_parse_conf(string $text): array
                         $current_peer['endpointport'] = substr($val_trim, $last_colon + 1);
                     } else {
                         // Порт не указан явно в Endpoint - оставляем текущий/дефолтный,
-                        // весь Endpoint трактуем как хост (защита от бага, найденного
-                        // в ревью: раньше IP без порта становился портом).
+                        // весь Endpoint трактуем как хост (защита от бага: раньше IP
+                        // без порта становился портом).
                         $current_peer['endpoint']     = $val_trim;
                         $current_peer['endpointport'] = $current_peer['endpointport'] ?: '51820';
-                    }   
+                    }
                     break;
                 case 'allowedips':
                     $current_peer['allowedips'] = $val;
