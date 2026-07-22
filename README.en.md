@@ -1,4 +1,5 @@
 # pfSense-pkg-amneziawg-client
+[Читать на Русском](README.md) | **[English]**
 
 A client-side **AmneziaWG** plugin (a WireGuard fork with protocol obfuscation for DPI evasion) for **pfSense 2.8.1 Community Edition**.
 
