@@ -160,9 +160,12 @@ case "${COMMAND}" in
         cmd_deploy_files
         service awg restart 2>/dev/null || true
         ok "Обновление завершено"
+        ;;
     uninstall)
         info "Удаление AmneziaWG Client..."
         service awg stop 2>/dev/null || true
+        pkill -f amneziawg-go 2>/dev/null || true
+        sleep 1
         cmd_deregister
         cmd_remove_files
         ok "Удаление завершено"
