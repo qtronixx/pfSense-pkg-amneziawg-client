@@ -2,17 +2,18 @@
 /*
  * vpn_awg_edit.php
  * -----------------------------------------------------------------------
- * ИСПРАВЛЕНИЯ (17.07.2026):
- *   - Добавлен class="form-horizontal" на <form> - без него Bootstrap
- *     не выравнивает label (col-sm-2) и поле (col-sm-10) горизонтально,
- *     что и давало "съехавшую" вёрстку.
- *   - id формы переименован с "iform" на "awgform" - на диагностику:
- *     штатный JS pfSense может по-особому обрабатывать формы именно
- *     с id="iform", это исключает такое поведение как причину
- *     несрабатывающего сохранения.
- *   - Добавлено логирование через awg_debug() на каждом шаге обработки
- *     POST - для диагностики, почему сохранение не срабатывало.
- *   - Добавлена обработка разбора
+ * ИСПРАВЛЕНИЯ:
+ *   - form-horizontal для корректной вёрстки Bootstrap.
+ *   - id формы "awgform" вместо "iform".
+ *   - Логирование через awg_debug() на каждом шаге обработки POST.
+ *   - Импорт готового .conf (текст/файл) через awg_parse_conf().
+ *   - УБРАН дублирующийся блок обработки POST, который оставался в
+ *     файле со времён предыдущей правки - вызывал повторную обработку
+ *     $_POST и затирал результат разбора конфига пустыми значениями.
+ *   - I1-I5 хранятся в $pconfig как ЧИТАЕМЫЙ текст везде (загрузка
+ *     существующего туннеля, разбор .conf, рендер формы); кодируются
+ *     в base64 только один раз - непосредственно при формировании
+ *     $entry перед awg_save_tunnels().
  * -----------------------------------------------------------------------
  */
 
@@ -83,26 +84,9 @@ if ($id !== null && isset($tunnels[$id])) {
     }
 }
 
+$input_errors  = [];
 $parse_message = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['parse_conf'] ?? false)) {
-    $conf_text = (string)($_POST['conf_text'] ?? '');
-    if (trim($conf_text) === '') {
-        $parse_message = 'Вставьте текст конфигурации или выберите файл перед разбором.';
-    } else {
-        $parsed = awg_parse_conf($conf_text);
-        // Сохраняем имя/enabled/id как есть (не затираем данными из файла),
-        // остальное - из распознанного конфига.
-        $pconfig = array_merge($pconfig, $parsed);
-        awg_debug('Конфиг разобран из вставленного текста, найдено peer: ' . count($parsed['peer'] ?? []));
-        $parse_message = 'Конфигурация разобрана и подставлена в поля формы ниже. Проверьте значения и нажмите «Сохранить».';
-    }
-}
 
-$input_errors = [];
-
-/* -----------------------------------------------------------------
- * Обработка POST
- * ----------------------------------------------------------------- */
 awg_debug('vpn_awg_edit.php: REQUEST_METHOD=' . ($_SERVER['REQUEST_METHOD'] ?? '?'));
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -110,97 +94,121 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $pconfig = $_POST;
 
-    $peer_count = count($_POST['peer_pubkey'] ?? []);
-    awg_debug('peer_count из POST: ' . $peer_count);
-
-    $peers = [];
-    for ($i = 0; $i < $peer_count; $i++) {
-        if (trim((string)($_POST['peer_pubkey'][$i] ?? '')) === '') {
-            continue;
-        }
-        $peers[] = [
-            'pubkey'        => trim((string)$_POST['peer_pubkey'][$i]),
-            'presharedkey'  => trim((string)($_POST['peer_psk'][$i] ?? '')),
-            'endpoint'      => trim((string)($_POST['peer_endpoint'][$i] ?? '')),
-            'endpointport'  => trim((string)($_POST['peer_endpointport'][$i] ?? '')),
-            'allowedips'    => trim((string)($_POST['peer_allowedips'][$i] ?? '')),
-            'keepalive'     => trim((string)($_POST['peer_keepalive'][$i] ?? '')),
-        ];
-    }
-    $pconfig['peer'] = $peers;
-    awg_debug('Собрано peers: ' . count($peers));
-
-    if ($_POST['genkey'] ?? false) {
-        awg_debug('Нажата кнопка genkey');
-        $kp = awg_genkey();
-        $pconfig['privkey'] = $kp['privkey'] ?? '';
-        $pconfig['pubkey']  = $kp['pubkey'] ?? '';
-        if (!empty($kp['error'])) {
-            awg_debug('awg_genkey() ошибка: ' . $kp['error']);
-        }
-    }
-
-    if ($_POST['save'] ?? false) {
-        awg_debug('Нажата кнопка save, запускаю валидацию');
-        $input_errors = awg_validate_tunnel_form($pconfig);
-        awg_debug('Результат валидации, ошибок: ' . count($input_errors) . ' | ' . implode(' || ', $input_errors));
-
-        if (empty($input_errors)) {
-            // Защита от обхода readonly на имени интерфейса при редактировании -
-            // берём имя из уже сохранённого туннеля, а не из POST.
-            $final_name = ($id !== null && isset($tunnels[$id]))
-                ? $tunnels[$id]['name']
-                : $pconfig['name'];
-
-            $entry = [
-                'name'       => $final_name,
-                'enabled'    => !empty($pconfig['enabled']) ? '1' : '',
-                'descr'      => $pconfig['descr'] ?? '',
-                'privkey'    => $pconfig['privkey'],
-                'pubkey'     => $pconfig['pubkey'] ?? '',
-                'address'    => $pconfig['address'] ?? '',
-                'address6'   => $pconfig['address6'] ?? '',
-                'listenport' => $pconfig['listenport'] ?? '',
-                'mtu'        => $pconfig['mtu'] ?? '1420',
-                'jc'         => $pconfig['jc'],
-                'jmin'       => $pconfig['jmin'],
-                'jmax'       => $pconfig['jmax'],
-                's1'         => $pconfig['s1'],
-                's2'         => $pconfig['s2'],
-                's3'         => $pconfig['s3'] ?? '0',
-                's4'         => $pconfig['s4'] ?? '0',
-                'h1'         => $pconfig['h1'],
-                'h2'         => $pconfig['h2'],
-                'h3'         => $pconfig['h3'],
-                'h4'         => $pconfig['h4'],
-                'i1' => awg_encode_cps(trim((string)($pconfig['i1'] ?? ''))),
-                'i2' => awg_encode_cps(trim((string)($pconfig['i2'] ?? ''))),
-                'i3' => awg_encode_cps(trim((string)($pconfig['i3'] ?? ''))),
-                'i4' => awg_encode_cps(trim((string)($pconfig['i4'] ?? ''))),
-                'i5' => awg_encode_cps(trim((string)($pconfig['i5'] ?? ''))),
-                'dns'        => trim((string)($pconfig['dns'] ?? '')),
-                'peer'       => $peers,
-            ];
-
-            if ($id !== null && isset($tunnels[$id])) {
-                $tunnels[$id] = $entry;
-                awg_debug('Обновляю существующий туннель id=' . $id);
-            } else {
-                $tunnels[] = $entry;
-                awg_debug('Добавляю новый туннель: ' . $entry['name']);
-            }
-
-            $save_ok = awg_save_tunnels($tunnels);
-            awg_debug('awg_save_tunnels() результат: ' . ($save_ok ? 'true' : 'FALSE'));
-
-            $conf_ok = awg_write_conf($entry);
-            awg_debug('awg_write_conf() результат: ' . ($conf_ok ? 'true' : 'FALSE'));
-
-            awg_debug('Редирект на vpn_awg_tunnels.php');
-            header('Location: /vpn_awg_tunnels.php');
-            exit;
+    if ($_POST['parse_conf'] ?? false) {
+        /*
+         * Импорт .conf изолирован в свою ветку - не должен доходить до
+         * кода ниже, который строит $pconfig['peer'] из плоских полей
+         * peer_pubkey[]/peer_endpoint[] и т.д. Иначе пустые значения из
+         * ещё не заполненной формы перезаписали бы то, что мы только
+         * что разобрали из текста конфига.
+         */
+        awg_debug('Нажата кнопка "Разобрать конфиг"');
+        $conf_text = (string)($pconfig['conf_text'] ?? '');
+        if (trim($conf_text) === '') {
+            $parse_message = 'Вставьте текст конфигурации или выберите файл перед разбором.';
         } else {
-            awg_debug('Валидация не прошла, форма НЕ сохранена, показываю ошибки пользователю');
+            $parsed = awg_parse_conf($conf_text);
+            $pconfig = array_merge($pconfig, $parsed);
+            awg_debug('Конфиг разобран, найдено peer: ' . count($parsed['peer'] ?? []));
+            $parse_message = 'Конфигурация разобрана и подставлена в поля формы ниже. Проверьте значения и нажмите «Сохранить».';
+        }
+    } else {
+        $peer_count = count($_POST['peer_pubkey'] ?? []);
+        awg_debug('peer_count из POST: ' . $peer_count);
+
+        $peers = [];
+        for ($i = 0; $i < $peer_count; $i++) {
+            if (trim((string)($_POST['peer_pubkey'][$i] ?? '')) === '') {
+                continue;
+            }
+            $peers[] = [
+                'pubkey'        => trim((string)$_POST['peer_pubkey'][$i]),
+                'presharedkey'  => trim((string)($_POST['peer_psk'][$i] ?? '')),
+                'endpoint'      => trim((string)($_POST['peer_endpoint'][$i] ?? '')),
+                'endpointport'  => trim((string)($_POST['peer_endpointport'][$i] ?? '')),
+                'allowedips'    => trim((string)($_POST['peer_allowedips'][$i] ?? '')),
+                'keepalive'     => trim((string)($_POST['peer_keepalive'][$i] ?? '')),
+            ];
+        }
+        $pconfig['peer'] = $peers;
+        awg_debug('Собрано peers: ' . count($peers));
+
+        if ($_POST['genkey'] ?? false) {
+            awg_debug('Нажата кнопка genkey');
+            $kp = awg_genkey();
+            $pconfig['privkey'] = $kp['privkey'] ?? '';
+            $pconfig['pubkey']  = $kp['pubkey'] ?? '';
+            if (!empty($kp['error'])) {
+                awg_debug('awg_genkey() ошибка: ' . $kp['error']);
+            }
+        }
+
+        if ($_POST['save'] ?? false) {
+            awg_debug('Нажата кнопка save, запускаю валидацию');
+            $input_errors = awg_validate_tunnel_form($pconfig);
+            awg_debug('Результат валидации, ошибок: ' . count($input_errors) . ' | ' . implode(' || ', $input_errors));
+
+            if (empty($input_errors)) {
+                // Защита от обхода readonly на имени интерфейса при редактировании -
+                // берём имя из уже сохранённого туннеля, а не из POST.
+                $final_name = ($id !== null && isset($tunnels[$id]))
+                    ? $tunnels[$id]['name']
+                    : $pconfig['name'];
+
+                $entry = [
+                    'name'       => $final_name,
+                    'enabled'    => !empty($pconfig['enabled']) ? '1' : '',
+                    'descr'      => $pconfig['descr'] ?? '',
+                    'privkey'    => $pconfig['privkey'],
+                    'pubkey'     => $pconfig['pubkey'] ?? '',
+                    'address'    => $pconfig['address'] ?? '',
+                    'address6'   => $pconfig['address6'] ?? '',
+                    'listenport' => $pconfig['listenport'] ?? '',
+                    'mtu'        => $pconfig['mtu'] ?? '1420',
+                    'jc'         => $pconfig['jc'],
+                    'jmin'       => $pconfig['jmin'],
+                    'jmax'       => $pconfig['jmax'],
+                    's1'         => $pconfig['s1'],
+                    's2'         => $pconfig['s2'],
+                    's3'         => $pconfig['s3'] ?? '0',
+                    's4'         => $pconfig['s4'] ?? '0',
+                    'h1'         => $pconfig['h1'],
+                    'h2'         => $pconfig['h2'],
+                    'h3'         => $pconfig['h3'],
+                    'h4'         => $pconfig['h4'],
+                    // ЕДИНСТВЕННОЕ место кодирования I1-I5 в base64 -
+                    // $pconfig['i1'..'i5'] здесь ВСЕГДА читаемый текст,
+                    // независимо от того, откуда он взялся (существующий
+                    // туннель после decode, разбор .conf, или ручной ввод).
+                    'i1' => awg_encode_cps(trim((string)($pconfig['i1'] ?? ''))),
+                    'i2' => awg_encode_cps(trim((string)($pconfig['i2'] ?? ''))),
+                    'i3' => awg_encode_cps(trim((string)($pconfig['i3'] ?? ''))),
+                    'i4' => awg_encode_cps(trim((string)($pconfig['i4'] ?? ''))),
+                    'i5' => awg_encode_cps(trim((string)($pconfig['i5'] ?? ''))),
+                    'dns'        => trim((string)($pconfig['dns'] ?? '')),
+                    'peer'       => $peers,
+                ];
+
+                if ($id !== null && isset($tunnels[$id])) {
+                    $tunnels[$id] = $entry;
+                    awg_debug('Обновляю существующий туннель id=' . $id);
+                } else {
+                    $tunnels[] = $entry;
+                    awg_debug('Добавляю новый туннель: ' . $entry['name']);
+                }
+
+                $save_ok = awg_save_tunnels($tunnels);
+                awg_debug('awg_save_tunnels() результат: ' . ($save_ok ? 'true' : 'FALSE'));
+
+                $conf_ok = awg_write_conf($entry);
+                awg_debug('awg_write_conf() результат: ' . ($conf_ok ? 'true' : 'FALSE'));
+
+                awg_debug('Редирект на vpn_awg_tunnels.php');
+                header('Location: /vpn_awg_tunnels.php');
+                exit;
+            } else {
+                awg_debug('Валидация не прошла, форма НЕ сохранена, показываю ошибки пользователю');
+            }
         }
     }
 }

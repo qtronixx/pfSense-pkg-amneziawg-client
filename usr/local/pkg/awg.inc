@@ -720,9 +720,13 @@ function awg_parse_conf(string $text): array
                     $result[$key] = $val;
                     break;
                 case 'i1': case 'i2': case 'i3': case 'i4': case 'i5':
-                    // Кодируем сразу в base64 - так хранятся в tunnels.json,
-                    // форма ожидает decode на выходе (см. awg_decode_cps в edit.php).
-                    $result[$key] = awg_encode_cps($val);
+                    // ВАЖНО: НЕ кодируем здесь. $pconfig всегда хранит ЧИТАЕМЫЙ текст
+                    // I1-I5 (та же конвенция, что и при загрузке существующего туннеля
+                    // через awg_decode_cps() в vpn_awg_edit.php) - кодирование в base64
+                    // происходит один раз, непосредственно в момент awg_save_tunnels()
+                    // при формировании $entry. Если кодировать уже здесь, повторное
+                    // awg_encode_cps() при сохранении задвоило бы кодировку.
+                    $result[$key] = $val;
                     break;
                 // mtu - намеренно игнорируем, см. комментарий в awg_build_conf()
             }
