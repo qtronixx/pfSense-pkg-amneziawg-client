@@ -293,7 +293,7 @@ include('head.inc');
                        value="<?= htmlspecialchars($pconfig['privkey']) ?>">
             </div>
             <div class="col-sm-2">
-                <button type="submit" name="genkey" value="1" class="btn btn-default">
+                <button type="submit" name="genkey" value="1" class="btn btn-default" formnovalidate>
                     <?= gettext('Сгенерировать пару ключей') ?>
                 </button>
             </div>
