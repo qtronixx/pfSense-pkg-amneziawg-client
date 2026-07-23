@@ -36,12 +36,17 @@ fi
 
 cmd_deploy_files() {
     info "Копирование файлов пакета..."
-    
+
     mkdir -p /usr/local/pkg
     mkdir -p /usr/local/www/widgets/widgets
     mkdir -p /usr/local/etc/rc.d
     mkdir -p /etc/inc/priv
     mkdir -p /usr/local/bin
+    # ИСПРАВЛЕНО: директория для tunnels.json/debug.enabled должна
+    # существовать ДО touch ниже - раньше она создавалась только
+    # позже, внутри awg_install(), что ломало чистую установку
+    # (set -e обрывал install.sh на несуществующей директории).
+    mkdir -p /usr/local/etc/amnezia/amneziawg
 
     cp "${REPO_ROOT}/usr/local/pkg/awg.inc"           /usr/local/pkg/awg.inc
     cp "${REPO_ROOT}/usr/local/pkg/awg_validate.inc"  /usr/local/pkg/awg_validate.inc
@@ -58,13 +63,6 @@ cmd_deploy_files() {
     cp "${REPO_ROOT}/usr/local/etc/rc.d/awg.sh" /usr/local/etc/rc.d/awg
     chmod 555 /usr/local/etc/rc.d/awg
 
-    # сохраняет текущее поведение (debug включён по умолчанию, пока проект тестируется), но переживает update, и уже готовит почву под будущий чекбокс в GUI.
-    [ -f /usr/local/etc/amnezia/amneziawg/debug.enabled ] || touch /usr/local/etc/amnezia/amneziawg/debug.enabled
-
-    # НОВОЕ: бинарники теперь входят в репозиторий (локально пропатченная
-    # сборка awg - см. историю фикса MAX_AWG_STRING_LEN - официального
-    # релиза с этим патчем не существует, поэтому GitHub Releases
-    # апстрима не подходит как источник).
     if [ -f "${REPO_ROOT}/bin/amneziawg-go" ] && [ -f "${REPO_ROOT}/bin/awg" ]; then
         cp "${REPO_ROOT}/bin/amneziawg-go" /usr/local/bin/amneziawg-go
         cp "${REPO_ROOT}/bin/awg"          /usr/local/bin/awg
@@ -73,6 +71,8 @@ cmd_deploy_files() {
     else
         echo "  [WARN] bin/amneziawg-go или bin/awg не найдены в репозитории - установите их вручную в /usr/local/bin/"
     fi
+
+    [ -f /usr/local/etc/amnezia/amneziawg/debug.enabled ] || touch /usr/local/etc/amnezia/amneziawg/debug.enabled
 
     ok "Файлы скопированы"
 }

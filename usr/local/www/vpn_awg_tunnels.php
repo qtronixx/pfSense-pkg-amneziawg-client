@@ -41,8 +41,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-if ($act === 'toggle' && $id !== null && isset($tunnels[$id])) {
-    $tunnels[$id]['enabled'] = empty($tunnels[$id]['enabled']) ? '1' : '';
+if ($act === 'del' && $id !== null && isset($tunnels[$id])) {
+    try {
+        awg_down($tunnels[$id], true);
+    } catch (Throwable $e) {
+        log_error('AmneziaWG: ошибка при остановке туннеля перед удалением (' .
+                   awg_log_safe($tunnels[$id]['name'] ?? '?') . '): ' . awg_log_safe($e->getMessage()));
+    }
+
+    try {
+        @unlink(awg_conf_path($tunnels[$id]['name']));
+    } catch (Throwable $e) {
+        log_error('AmneziaWG: не удалось удалить .conf-файл при удалении туннеля: ' . awg_log_safe($e->getMessage()));
+    }
+
+    // Запись из tunnels.json удаляется ВСЕГДА, даже если имя было
+    // некорректным и awg_down()/awg_conf_path() выше выбросили
+    // исключение - иначе битая запись навсегда "залипает" в списке
+    // (найденная проблема: было бы "остановлен, но не удалён").
+    unset($tunnels[$id]);
+    $tunnels = array_values($tunnels);
     awg_save_tunnels($tunnels);
     header('Location: /vpn_awg_tunnels.php');
     exit;
