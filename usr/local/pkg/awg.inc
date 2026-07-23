@@ -67,11 +67,24 @@ function awg_debug_enabled(): bool
 }
 
 /*
- * ИСПРАВЛЕНО: функция awg_debug() была объявлена дважды (фатальная
- * ошибка "Cannot redeclare function") - оставлена только одна версия,
- * использующая awg_debug_enabled() (флаг-файл, переживает install.sh
- * update, в отличие от захардкоженной константы true/false).
+ * Включает/выключает отладочное логирование через флаг-файл.
+ * Используется чекбоксом на странице VPN -> AmneziaWG -> Туннели.
  */
+function awg_set_debug(bool $enable): bool
+{
+    if ($enable) {
+        $dir = dirname(AWG_DEBUG_FLAG_FILE);
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0700, true);
+        }
+        return @touch(AWG_DEBUG_FLAG_FILE) !== false;
+    }
+    if (file_exists(AWG_DEBUG_FLAG_FILE)) {
+        return (bool) @unlink(AWG_DEBUG_FLAG_FILE);
+    }
+    return true;
+}
+
 function awg_debug(string $msg): void
 {
     if (awg_debug_enabled()) {

@@ -3,15 +3,14 @@
  * vpn_awg_tunnels.php
  * -----------------------------------------------------------------------
  * ИСПРАВЛЕНИЯ:
- *   - Действия toggle/del/apply переведены с GET-ссылок на POST-формы -
- *     GET-запросы для мутирующих операций уязвимы к CSRF (администратор
- *     мог случайно "кликнуть" вредоносную ссылку и удалить/перезапустить
- *     туннель). pfSense автоматически добавляет CSRF-токен во все
- *     POST-формы через встроенный csrf-magic - для этого не нужно
- *     ничего делать вручную, достаточно использовать <form method="post">.
- *   - $id теперь строго проверяется через ctype_digit() перед приведением
- *     к int - раньше ?act=del&id=abc молча превращался в id=0 и мог
- *     удалить не тот туннель.
+ *   - toggle/del/apply переведены с GET на POST (CSRF-защита через
+ *     встроенный csrf-magic pfSense).
+ *   - $id строго проверяется через ctype_digit() перед int.
+ *   - Удаление туннеля обёрнуто в try/catch - битое имя интерфейса
+ *     (InvalidArgumentException из awg_conf_path()) больше не мешает
+ *     удалению записи из tunnels.json.
+ *   - Добавлен переключатель отладочного логирования (флаг-файл,
+ *     переживает install.sh update, в отличие от прежней константы).
  * -----------------------------------------------------------------------
  */
 
@@ -41,6 +40,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+if ($act === 'toggle' && $id !== null && isset($tunnels[$id])) {
+    $tunnels[$id]['enabled'] = empty($tunnels[$id]['enabled']) ? '1' : '';
+    awg_save_tunnels($tunnels);
+    header('Location: /vpn_awg_tunnels.php');
+    exit;
+}
+
 if ($act === 'del' && $id !== null && isset($tunnels[$id])) {
     try {
         awg_down($tunnels[$id], true);
@@ -56,19 +62,7 @@ if ($act === 'del' && $id !== null && isset($tunnels[$id])) {
     }
 
     // Запись из tunnels.json удаляется ВСЕГДА, даже если имя было
-    // некорректным и awg_down()/awg_conf_path() выше выбросили
-    // исключение - иначе битая запись навсегда "залипает" в списке
-    // (найденная проблема: было бы "остановлен, но не удалён").
-    unset($tunnels[$id]);
-    $tunnels = array_values($tunnels);
-    awg_save_tunnels($tunnels);
-    header('Location: /vpn_awg_tunnels.php');
-    exit;
-}
-
-if ($act === 'del' && $id !== null && isset($tunnels[$id])) {
-    awg_down($tunnels[$id], true);
-    @unlink(awg_conf_path($tunnels[$id]['name']));
+    // некорректным - иначе битая запись навсегда "залипает" в списке.
     unset($tunnels[$id]);
     $tunnels = array_values($tunnels);
     awg_save_tunnels($tunnels);
@@ -79,6 +73,18 @@ if ($act === 'del' && $id !== null && isset($tunnels[$id])) {
 if ($act === 'apply') {
     awg_sync_all();
     $savemsg = gettext('Конфигурация всех туннелей AmneziaWG применена.');
+}
+
+if ($act === 'debug_on') {
+    awg_set_debug(true);
+    header('Location: /vpn_awg_tunnels.php');
+    exit;
+}
+
+if ($act === 'debug_off') {
+    awg_set_debug(false);
+    header('Location: /vpn_awg_tunnels.php');
+    exit;
 }
 
 include('head.inc');
@@ -197,6 +203,30 @@ include('head.inc');
             </a>
         </nav>
 
+    </div>
+</div>
+
+<div class="panel panel-default">
+    <div class="panel-heading">
+        <h2 class="panel-title"><?= gettext('Отладка') ?></h2>
+    </div>
+    <div class="panel-body">
+        <form method="post" style="display:inline">
+            <input type="hidden" name="act" value="<?= awg_debug_enabled() ? 'debug_off' : 'debug_on' ?>">
+            <button type="submit" class="btn btn-sm <?= awg_debug_enabled() ? 'btn-warning' : 'btn-default' ?>">
+                <?php if (awg_debug_enabled()): ?>
+                    <i class="fa-solid fa-toggle-on icon-embed-btn"></i><?= gettext('Отладочное логирование ВКЛЮЧЕНО - нажмите, чтобы выключить') ?>
+                <?php else: ?>
+                    <i class="fa-solid fa-toggle-off icon-embed-btn"></i><?= gettext('Отладочное логирование выключено - нажмите, чтобы включить') ?>
+                <?php endif; ?>
+            </button>
+        </form>
+        <p class="text-muted small">
+            <?= gettext('При включении подробные сообщения пакета пишутся в системный лог ' .
+                        '(Status -> System Logs) с префиксом "AmneziaWG DEBUG". Полезно для ' .
+                        'диагностики проблем, но не рекомендуется держать включённым постоянно ' .
+                        'на боевой системе - засоряет лог.') ?>
+        </p>
     </div>
 </div>
 
