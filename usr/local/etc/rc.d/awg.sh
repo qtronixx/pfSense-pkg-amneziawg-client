@@ -29,9 +29,7 @@ awg_start()
         return 1
     fi
     echo "Запуск AmneziaWG Client (синхронизация всех туннелей)..."
-    ${PHP} -r "require_once('${AWGINC}'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1
-    ifconfig | grep tun >> /var/log/awg-boot.log
-    echo "$(date): awg_start() завершён" >> /var/log/awg-boot.log
+    ( sleep 10 && ${PHP} -r "require_once('${AWGINC}'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1 ) &
 }
 
 awg_stop()
