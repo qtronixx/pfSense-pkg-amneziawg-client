@@ -20,7 +20,7 @@
  *   - Адрес/MTU/gateway интерфейса НЕ назначаются этим кодом напрямую
  *     через ifconfig inet - это конфликтовало с конфигурацией самого
  *     pfSense (Interfaces -> AWGCLIENT -> Static IPv4) и ломало
- *     NAT/gateway monitoring. Вместо этого после создания awg0
+ *     NAT/gateway monitoring. Вместо этого после создания tun9NNN
  *     вызывается штатная interface_configure() pfSense, которая
  *     применяет уже сохранённую в pfSense конфигурацию интерфейса.
  *   - НЕ подключаем services.inc - на 2.8.1 может требовать
@@ -320,7 +320,7 @@ function awg_uapi_sock(string $ifname): string
 
 /*
  * Ищет "дружественное" имя интерфейса (opt1, wan, lan...) в
- * конфигурации pfSense по физическому имени устройства (awg0) - нужно
+ * конфигурации pfSense по физическому имени устройства (tun9NNN) - нужно
  * для interface_configure(), которая принимает дружественное имя.
  */
 function awg_find_pfsense_interface_name(string $ifname): ?string

@@ -91,6 +91,21 @@ Creating and applying the tunnel in our plugin is **not enough** for actual traf
 
 By default, pfSense's `interface_configure()` sets the MTU to **1500** if the MTU field on the `AWGCLIENT` interface page is left blank. For WireGuard-like protocols, an MTU of **1420** is recommended (to account for encapsulation overhead) — if you run into fragmentation or large-packet-loss issues, enter `1420` explicitly in the **MTU** field on the **Interfaces → AWGCLIENT** page (not in our form — see Roadmap).
 
+> 💡 **Important Note for Multiple AmneziaWG Connections**
+> 
+> If you are setting up connections to **multiple AmneziaWG servers simultaneously**, ensure that the VPN IP subnets on those servers do not overlap.
+>
+> **Why is this required?**  
+> By default, AmneziaWG servers often assign the same client subnet (e.g., `10.8.1.0/24`). If two separate tunnels on pfSense receive IP addresses from the identical subnet, it will cause routing table conflicts, overlapping subnet routes, and broken gateway functionality.
+>
+> **How to change the subnet on your second server:**
+> 1. Open the **AmneziaVPN** client application on your PC.
+> 2. Go to **Settings** → **Servers** → Select your **2nd server**.
+> 3. Click **Protocols** → **AmneziaWG** → **AmneziaWG Server Settings**.
+> 4. In the **VPN IP Subnet** field, change the subnet to another unique private range (e.g., change `10.8.1.0/24` to `10.8.2.0/24` or `10.9.1.0/24`).
+> 5. Save the configuration and generate a new config file for pfSense.
+
+
 ## Importing an existing `.conf`
 
 On the **Add tunnel** page, there's an **"Import from an existing .conf file"** block:
