@@ -136,7 +136,7 @@ include('head.inc');
                         $peers = [$peers];
                     }
                     $first_peer = $peers[0] ?? [];
-                    $running = does_interface_exist($t['name']);
+                    $conn_state = awg_connection_state($t['name']);
                 ?>
                 <tr>
                     <td>
@@ -155,8 +155,10 @@ include('head.inc');
                     </td>
                     <td>
                         <?= htmlspecialchars($t['name']) ?>
-                        <?php if ($running): ?>
-                            <span class="label label-success"><?= gettext('запущен') ?></span>
+                        <?php if ($conn_state === 'connected'): ?>
+                            <span class="label label-success"><?= gettext('подключен') ?></span>
+                        <?php elseif ($conn_state === 'connecting'): ?>
+                            <span class="label label-warning"><?= gettext('устанавливается соединение...') ?></span>
                         <?php else: ?>
                             <span class="label label-default"><?= gettext('остановлен') ?></span>
                         <?php endif; ?>

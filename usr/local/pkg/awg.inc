@@ -93,6 +93,39 @@ function awg_debug(string $msg): void
     }
 }
 
+/*
+ * Возвращает реальное состояние соединения, а не просто факт
+ * существования tun-интерфейса. 'stopped' - выключен/не создан,
+ * 'connecting' - интерфейс есть, но handshake ещё не было или устарел,
+ * 'connected' - недавний handshake хотя бы с одним peer.
+ */
+function awg_connection_state(string $ifname): string
+{
+    if (!does_interface_exist($ifname)) {
+        return 'stopped';
+    }
+
+    $out = [];
+    exec(escapeshellcmd(AWG_BIN) . ' show ' . escapeshellarg($ifname) . ' latest-handshakes 2>/dev/null', $out);
+    if (empty($out)) {
+        return 'connecting';
+    }
+
+    $freshest = 0;
+    foreach ($out as $line) {
+        $parts = preg_split('/\s+/', trim($line));
+        if (count($parts) >= 2 && ctype_digit($parts[1])) {
+            $freshest = max($freshest, (int)$parts[1]);
+        }
+    }
+
+    // "Свежий" handshake - в пределах ~3 интервалов keepalive (по умолчанию 25с -> 180с с запасом)
+    if ($freshest > 0 && (time() - $freshest) < 180) {
+        return 'connected';
+    }
+    return 'connecting';
+}
+
 /* --- Кодирование CPS-строк (I1-I5) для безопасного хранения --- */
 function awg_encode_cps(string $v): string
 {
@@ -518,12 +551,18 @@ function awg_up(array $t): array
 
     $log = AWG_RUN_DIR . $ifname . '.log';
     $cmd = sprintf(
-        'daemon -f -p %s %s %s >> %s 2>&1',
-        escapeshellarg(awg_pidfile($ifname)),
-        escapeshellarg(AWG_GO_BIN),
-        escapeshellarg($ifname),
-        escapeshellarg($log)
-    );
+    // ИСПРАВЛЕНО: убран флаг -f - он означает "перенаправить stdio
+    // дочернего процесса в /dev/null" (см. man daemon(8)), а НЕ
+    // "форк"/detach (daemon(8) отделяется от управляющего терминала
+    // всегда, без флагов). С -f мы теряли ВСЕ реальные логи и ошибки
+    // amneziawg-go, включая критичные крэши - именно поэтому .log
+    // файлы демона всегда были пустыми на протяжении всей отладки.
+    'daemon -p %s %s %s >> %s 2>&1',
+    escapeshellarg(awg_pidfile($ifname)),
+    escapeshellarg(AWG_GO_BIN),
+    escapeshellarg($ifname),
+    escapeshellarg($log)
+);
     mwexec($cmd, true);
 
     $sock = awg_uapi_sock($ifname);
