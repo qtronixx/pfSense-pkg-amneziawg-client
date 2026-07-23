@@ -3,15 +3,14 @@
  * vpn_awg_tunnels.php
  * -----------------------------------------------------------------------
  * ИСПРАВЛЕНИЯ:
- *   - Действия toggle/del/apply переведены с GET-ссылок на POST-формы -
- *     GET-запросы для мутирующих операций уязвимы к CSRF (администратор
- *     мог случайно "кликнуть" вредоносную ссылку и удалить/перезапустить
- *     туннель). pfSense автоматически добавляет CSRF-токен во все
- *     POST-формы через встроенный csrf-magic - для этого не нужно
- *     ничего делать вручную, достаточно использовать <form method="post">.
- *   - $id теперь строго проверяется через ctype_digit() перед приведением
- *     к int - раньше ?act=del&id=abc молча превращался в id=0 и мог
- *     удалить не тот туннель.
+ *   - toggle/del/apply переведены с GET на POST (CSRF-защита через
+ *     встроенный csrf-magic pfSense).
+ *   - $id строго проверяется через ctype_digit() перед int.
+ *   - Удаление туннеля обёрнуто в try/catch - битое имя интерфейса
+ *     (InvalidArgumentException из awg_conf_path()) больше не мешает
+ *     удалению записи из tunnels.json.
+ *   - Добавлен переключатель отладочного логирования (флаг-файл,
+ *     переживает install.sh update, в отличие от прежней константы).
  * -----------------------------------------------------------------------
  */
 
@@ -49,8 +48,21 @@ if ($act === 'toggle' && $id !== null && isset($tunnels[$id])) {
 }
 
 if ($act === 'del' && $id !== null && isset($tunnels[$id])) {
-    awg_down($tunnels[$id], true);
-    @unlink(awg_conf_path($tunnels[$id]['name']));
+    try {
+        awg_down($tunnels[$id], true);
+    } catch (Throwable $e) {
+        log_error('AmneziaWG: ошибка при остановке туннеля перед удалением (' .
+                   awg_log_safe($tunnels[$id]['name'] ?? '?') . '): ' . awg_log_safe($e->getMessage()));
+    }
+
+    try {
+        @unlink(awg_conf_path($tunnels[$id]['name']));
+    } catch (Throwable $e) {
+        log_error('AmneziaWG: не удалось удалить .conf-файл при удалении туннеля: ' . awg_log_safe($e->getMessage()));
+    }
+
+    // Запись из tunnels.json удаляется ВСЕГДА, даже если имя было
+    // некорректным - иначе битая запись навсегда "залипает" в списке.
     unset($tunnels[$id]);
     $tunnels = array_values($tunnels);
     awg_save_tunnels($tunnels);
@@ -61,6 +73,18 @@ if ($act === 'del' && $id !== null && isset($tunnels[$id])) {
 if ($act === 'apply') {
     awg_sync_all();
     $savemsg = gettext('Конфигурация всех туннелей AmneziaWG применена.');
+}
+
+if ($act === 'debug_on') {
+    awg_set_debug(true);
+    header('Location: /vpn_awg_tunnels.php');
+    exit;
+}
+
+if ($act === 'debug_off') {
+    awg_set_debug(false);
+    header('Location: /vpn_awg_tunnels.php');
+    exit;
 }
 
 include('head.inc');
@@ -179,6 +203,30 @@ include('head.inc');
             </a>
         </nav>
 
+    </div>
+</div>
+
+<div class="panel panel-default">
+    <div class="panel-heading">
+        <h2 class="panel-title"><?= gettext('Отладка') ?></h2>
+    </div>
+    <div class="panel-body">
+        <form method="post" style="display:inline">
+            <input type="hidden" name="act" value="<?= awg_debug_enabled() ? 'debug_off' : 'debug_on' ?>">
+            <button type="submit" class="btn btn-sm <?= awg_debug_enabled() ? 'btn-warning' : 'btn-default' ?>">
+                <?php if (awg_debug_enabled()): ?>
+                    <i class="fa-solid fa-toggle-on icon-embed-btn"></i><?= gettext('Отладочное логирование ВКЛЮЧЕНО - нажмите, чтобы выключить') ?>
+                <?php else: ?>
+                    <i class="fa-solid fa-toggle-off icon-embed-btn"></i><?= gettext('Отладочное логирование выключено - нажмите, чтобы включить') ?>
+                <?php endif; ?>
+            </button>
+        </form>
+        <p class="text-muted small">
+            <?= gettext('При включении подробные сообщения пакета пишутся в системный лог ' .
+                        '(Status -> System Logs) с префиксом "AmneziaWG DEBUG". Полезно для ' .
+                        'диагностики проблем, но не рекомендуется держать включённым постоянно ' .
+                        'на боевой системе - засоряет лог.') ?>
+        </p>
     </div>
 </div>
 

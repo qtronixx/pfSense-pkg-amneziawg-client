@@ -42,6 +42,11 @@ cmd_deploy_files() {
     mkdir -p /usr/local/etc/rc.d
     mkdir -p /etc/inc/priv
     mkdir -p /usr/local/bin
+    # ИСПРАВЛЕНО: директория для tunnels.json/debug.enabled должна
+    # существовать ДО touch ниже - раньше она создавалась только
+    # позже, внутри awg_install(), что ломало чистую установку
+    # (set -e обрывал install.sh на несуществующей директории).
+    mkdir -p /usr/local/etc/amnezia/amneziawg
 
     cp "${REPO_ROOT}/usr/local/pkg/awg.inc"           /usr/local/pkg/awg.inc
     cp "${REPO_ROOT}/usr/local/pkg/awg_validate.inc"  /usr/local/pkg/awg_validate.inc
@@ -58,10 +63,6 @@ cmd_deploy_files() {
     cp "${REPO_ROOT}/usr/local/etc/rc.d/awg.sh" /usr/local/etc/rc.d/awg
     chmod 555 /usr/local/etc/rc.d/awg
 
-    # НОВОЕ: бинарники теперь входят в репозиторий (локально пропатченная
-    # сборка awg - см. историю фикса MAX_AWG_STRING_LEN - официального
-    # релиза с этим патчем не существует, поэтому GitHub Releases
-    # апстрима не подходит как источник).
     if [ -f "${REPO_ROOT}/bin/amneziawg-go" ] && [ -f "${REPO_ROOT}/bin/awg" ]; then
         cp "${REPO_ROOT}/bin/amneziawg-go" /usr/local/bin/amneziawg-go
         cp "${REPO_ROOT}/bin/awg"          /usr/local/bin/awg
@@ -70,6 +71,8 @@ cmd_deploy_files() {
     else
         echo "  [WARN] bin/amneziawg-go или bin/awg не найдены в репозитории - установите их вручную в /usr/local/bin/"
     fi
+
+    [ -f /usr/local/etc/amnezia/amneziawg/debug.enabled ] || touch /usr/local/etc/amnezia/amneziawg/debug.enabled
 
     ok "Файлы скопированы"
 }
@@ -139,7 +142,7 @@ cmd_remove_files() {
     rm -f /usr/local/www/vpn_awg_tunnels.php /usr/local/www/vpn_awg_edit.php /usr/local/www/vpn_awg_status.php
     rm -f /usr/local/www/widgets/widgets/awg_status.widget.php /usr/local/www/widgets/widgets/awg_status.xml
     rm -f /etc/inc/priv/awg.priv.inc
-    rm -f /usr/local/etc/rc.d/awg.sh
+    rm -f /usr/local/etc/rc.d/awg
     ok "Файлы удалены"
 }
 
@@ -150,8 +153,7 @@ case "${COMMAND}" in
         cmd_register
         echo ""
         info "Установка завершена!"
-        echo "  1. Убедитесь, что /usr/local/bin/amneziawg-go и /usr/local/bin/awg на месте"
-        echo "     (scripts/install_binaries.sh, если ещё не установлены)"
+        echo "  1. Бинарники amneziawg-go/awg уже установлены из bin/ репозитория"
         echo "  2. Откройте VPN -> AmneziaWG в веб-интерфейсе"
         ;;
     update)
