@@ -595,11 +595,10 @@ function awg_up(array $t): array
     if ($friendly !== null) {
         if (function_exists('interface_configure')) {
             if (!defined('AWG_BOOT_START')) {
-               interface_configure($friendly, true);
-                awg_debug("interface_configure({$friendly}) с reload вызван (GUI/Apply).");
+                interface_configure($friendly, true);
+                awg_debug("interface_configure({$friendly}) вызван для применения адреса/gateway из настроек pfSense.");
             } else {
-                interface_configure($friendly);
-                awg_debug("interface_configure({$friendly}) БЕЗ reload вызван при загрузке.");
+                awg_debug("interface_configure({$friendly}) пропущен при загрузке — будет вызван штатно через rc.bootup позже.");
             }
         } else {
             log_error("AmneziaWG: функция interface_configure() недоступна - адрес нужно назначить вручную.");

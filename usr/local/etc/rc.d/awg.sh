@@ -29,7 +29,16 @@ awg_start()
         return 1
     fi
     echo "Запуск AmneziaWG Client (синхронизация всех туннелей)..."
-    ( sleep 10 && ${PHP} -r "define('AWG_BOOT_START', true); require_once('${AWGINC}'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1 ) &
+
+    nohup sh -c "
+        echo \"\$(date): фоновая фаза 1 старт\" >> /var/log/awg-boot.log
+        sleep 10
+        echo \"\$(date): запуск awg_sync_all\" >> /var/log/awg-boot.log
+        ${PHP} -r \"define('AWG_BOOT_START', true); require_once('${AWGINC}'); awg_sync_all();\" >> /var/log/awg-boot.log 2>&1
+        echo \"\$(date): awg_sync_all завершён\" >> /var/log/awg-boot.log
+    " >> /var/log/awg-boot.log 2>&1 &
+
+    echo "$(date): awg_start() завершён (фоновая задача запущена)" >> /var/log/awg-boot.log
 }
 
 awg_stop()
