@@ -28,16 +28,8 @@ awg_start()
         echo "$(date): бинарники не найдены" >> /var/log/awg-boot.log
         return 1
     fi
-    # Запускаем PHP с туннелями
+    echo "Запуск AmneziaWG Client (синхронизация всех туннелей)..."
     ( sleep 10 && ${PHP} -r "define('AWG_BOOT_START', true); require_once('${AWGINC}'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1 ) &
-    # Мониторинг: пишем состояние каждые 5 секунд, 36 итераций = 3 минуты
-    ( for i in $(seq 1 36); do
-        sleep 5
-        echo "$(date): check $i" >> /var/log/awg-boot.log
-        ifconfig tun9000 >> /var/log/awg-boot.log 2>&1
-        ifconfig tun9001 >> /var/log/awg-boot.log 2>&1
-        ps aux | grep "[a]mneziawg-go" >> /var/log/awg-boot.log 2>&1
-      done ) &
 }
 
 awg_stop()
