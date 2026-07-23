@@ -546,7 +546,7 @@ function awg_up(array $t): array
     awg_write_conf($t);
 
     if (!is_dir(AWG_RUN_DIR)) {
-        @mkdir(AWG_RUN_DIR, 0700, true);
+        mkdir(AWG_RUN_DIR, 0700, true);
     }
 
     $log = AWG_RUN_DIR . $ifname . '.log';
