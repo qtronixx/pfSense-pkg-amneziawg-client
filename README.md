@@ -1,138 +1,138 @@
 # pfSense-pkg-amneziawg-client
-[Read in English](README.en.md) | **[Русский]**
+[Читать на Русском](README.ru.md) | **[English]**
 
-Клиентский плагин **AmneziaWG** (форк WireGuard с протокольной обфускацией для обхода DPI) для **pfSense 2.8.1 Community Edition**.
+A client-side **AmneziaWG** plugin (a WireGuard fork with protocol obfuscation for DPI evasion) for **pfSense 2.8.1 Community Edition**.
 
-> ⚠️ **Только клиентский режим.** Плагин подключает pfSense как клиента к внешнему AmneziaWG-серверу. Функций поднятия собственного AmneziaWG-сервера в этом пакете нет и не планируется.
+> ⚠️ **Client mode only.** This plugin connects pfSense as a client to an external AmneziaWG server. There is no functionality for running an AmneziaWG server in this package, and none is planned.
 
-> ⚠️ **Статус: рабочий прототип, активно тестируется.** Базовый функционал (создание туннеля, обфускация, реальный трафик через VPN) подтверждён практическим тестированием, включая полный "чистый" прогон установки. Известные ограничения и незакрытые задачи — см. раздел [Roadmap](#roadmap--известные-ограничения) в конце.
-
----
-
-## Содержание
-
-- [Архитектура](#архитектура)
-- [Требования](#требования)
-- [Установка](#установка)
-- [Обновление и удаление](#обновление-и-удаление)
-- [Настройка первого туннеля](#настройка-первого-туннеля)
-- [⚠️ Обязательные шаги в GUI pfSense](#️-обязательные-шаги-в-gui-pfsense-без-них-трафик-не-пойдёт)
-- [Импорт готового .conf](#импорт-готового-conf)
-- [Диагностика и логи](#диагностика-и-логи)
-- [Roadmap / известные ограничения](#roadmap--известные-ограничения)
-- [Лицензия](#лицензия)
+> ⚠️ **Status: working prototype, under active testing.** Core functionality (tunnel creation, obfuscation, real traffic through the VPN) has been confirmed by hands-on testing, including a full "clean-slate" install run. Known limitations and open tasks are listed in the [Roadmap](#roadmap--known-limitations) section below.
 
 ---
 
-## Архитектура
+## Contents
 
-- **Демон:** [`amneziawg-go`](https://github.com/amnezia-vpn/amneziawg-go) (форк `wireguard-go`) — userspace-реализация протокола, создаёт `tun`-интерфейс без участия ядра.
-- **Утилита конфигурирования:** [`amneziawg-tools`](https://github.com/amnezia-vpn/amneziawg-tools) (`awg`) — общается с демоном через UAPI unix-сокет.
-- **Кернел-модуль НЕ используется.** Netgate не публикует патченые исходники ядра pfSense для веток 2.8.x в открытом доступе, что делает сборку ABI-совместимого модуля (`if_awg.ko`) невозможной без риска паники ядра. Архитектура полностью userspace — это осознанное и единственно жизнеспособное решение для 2.8.1 на данный момент.
-- **Установка — не через `pkg`/FreeBSD-порты.** Плагин ставится собственным скриптом `install.sh`, который копирует файлы и регистрирует пункт меню напрямую, в обход хрупкого механизма `install_package_xml()`.
-- **Хранение туннелей — собственный JSON-файл** (`/usr/local/etc/amnezia/amneziawg/tunnels.json`), а не `config.xml` pfSense. Причина: обнаружен воспроизводимый баг — `write_config()` в pfSense 2.8.1 не сериализует глубоко вложенные структуры произвольных пакетов ни при каких попытках (подробности в комментариях `awg.inc`). Простые записи (пункт меню, информация о пакете) по-прежнему пишутся в `config.xml` — это работает штатно.
-- **Адрес/MTU/gateway интерфейса назначаются исключительно штатным механизмом pfSense** (Interfaces → Assignments → Static IPv4), не нашим кодом напрямую. После создания `tun`-устройства плагин вызывает `interface_configure()` pfSense, которая применяет уже сохранённую конфигурацию — единый источник истины, без конфликтов.
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Update and removal](#update-and-removal)
+- [Setting up your first tunnel](#setting-up-your-first-tunnel)
+- [⚠️ Mandatory pfSense GUI steps](#️-mandatory-pfsense-gui-steps-traffic-wont-pass-without-them)
+- [Importing an existing .conf](#importing-an-existing-conf)
+- [Diagnostics and logs](#diagnostics-and-logs)
+- [Roadmap / known limitations](#roadmap--known-limitations)
+- [License](#license)
 
-## Требования
+---
+
+## Architecture
+
+- **Daemon:** [`amneziawg-go`](https://github.com/amnezia-vpn/amneziawg-go) (a `wireguard-go` fork) — a userspace protocol implementation that creates a `tun` interface without any kernel involvement.
+- **Configuration tool:** [`amneziawg-tools`](https://github.com/amnezia-vpn/amneziawg-tools) (`awg`) — talks to the daemon over a UAPI unix socket.
+- **No kernel module is used.** Netgate does not publish the patched pfSense kernel sources for the 2.8.x branches publicly, which makes building an ABI-compatible kernel module (`if_awg.ko`) impossible without risking a kernel panic. A fully userspace architecture is the only viable approach for 2.8.1 at this time — this was a deliberate design decision, not an oversight.
+- **Installation does not go through `pkg`/FreeBSD ports.** The plugin is installed by its own `install.sh` script, which copies files directly and registers the menu entry itself, bypassing the fragile `install_package_xml()` mechanism.
+- **Tunnels are stored in a dedicated JSON file** (`/usr/local/etc/amnezia/amneziawg/tunnels.json`) rather than in pfSense's `config.xml`. Reason: a reproducible bug was found where `write_config()` on pfSense 2.8.1 fails to serialize deeply nested arbitrary-package data structures under any tested approach (see the comments in `awg.inc` for details). Simple entries (the menu item, the package record) are still written to `config.xml` — that works reliably.
+- **Interface address/MTU/gateway are assigned exclusively through pfSense's own mechanism** (Interfaces → Assignments → Static IPv4), not directly by our code. After creating the `tun` device, the plugin calls pfSense's `interface_configure()`, which applies the already-saved configuration — a single source of truth, with no conflicts.
+
+## Requirements
 
 - pfSense 2.8.1-RELEASE (Community Edition).
-- Внешний AmneziaWG-сервер (адрес, порт, ключи, параметры обфускации — обычно выдаются администратором сервера или экспортируются из панели Amnezia self-hosted).
-- Бинарники `amneziawg-go` и `awg` **уже включены** в репозиторий (`bin/`) — собраны под FreeBSD 15.1/amd64. Если ваша инсталляция pfSense построена на другой архитектуре или заметно отличающейся ревизии ядра — соберите их самостоятельно (инструкции по сборке — см. issues репозитория или свяжитесь через раздел обратной связи) и замените файлы в `bin/` перед установкой.
+- An external AmneziaWG server (address, port, keys, obfuscation parameters — typically provided by the server admin or exported from an Amnezia self-hosted panel).
+- The `amneziawg-go` and `awg` binaries are **already included** in the repository (`bin/`) — built for FreeBSD 15.1/amd64. If your pfSense build is on a different architecture or a noticeably different kernel revision, build them yourself (see the repository issues or reach out through the feedback channel for build instructions) and replace the files under `bin/` before installing.
 
-## Установка
+## Installation
 
 ```sh
-pkg install git   # если ещё не установлен
+pkg install git   # if not already installed
 git clone https://github.com/qtronixx/pfSense-pkg-amneziawg-client.git
 sh ./pfSense-pkg-amneziawg-client/install.sh install
 ```
 
-После установки:
-1. Проверьте, что бинарники на месте: `ls -la /usr/local/bin/amneziawg-go /usr/local/bin/awg`.
-2. Откройте **VPN → AmneziaWG** в веб-интерфейсе pfSense — должно появиться меню и страница со списком туннелей.
+After installation:
+1. Verify the binaries are in place: `ls -la /usr/local/bin/amneziawg-go /usr/local/bin/awg`.
+2. Open **VPN → AmneziaWG** in the pfSense web GUI — the menu entry and tunnel list page should appear.
 
-## Обновление и удаление
+## Update and removal
 
 ```sh
-# Обновление (после git pull в клонированной директории)
+# Update (after git pull inside the cloned directory)
 sh ./pfSense-pkg-amneziawg-client/install.sh update
 
-# Полное удаление
+# Full removal
 sh ./pfSense-pkg-amneziawg-client/install.sh uninstall
 ```
 
-Оба сценария сами останавливают службу перед заменой/удалением бинарников — вручную гасить процесс не требуется.
+Both flows stop the service on their own before replacing/removing the binaries — there's no need to kill the process manually.
 
-## Настройка первого туннеля
+## Setting up your first tunnel
 
-1. **VPN → AmneziaWG → Добавить туннель.**
-2. Заполните форму вручную, либо воспользуйтесь блоком **«Импорт из готового .conf файла»** в самом верху формы (см. [ниже](#импорт-готового-conf)).
-3. Обязательные поля:
-   - **Приватный ключ** — вставьте свой, либо нажмите «Сгенерировать пару ключей».
-   - **Параметры обфускации** (`Jc/Jmin/Jmax/S1-S4/H1-H4/I1-I5`) — должны **точно** совпадать со значениями на сервере. `H1-H4` принимают либо диапазон `min-max`, либо одиночное число.
-   - **Пиры** — минимум один peer с обязательным **Endpoint** (адрес и порт внешнего сервера). Peer без Endpoint через эту форму добавить нельзя — это техническая реализация клиентского ограничения пакета.
-4. Сохраните — туннель появится в списке на странице **Туннели**.
-5. Нажмите **«Применить изменения»** — интерфейс `awgN` будет создан и поднят.
+1. **VPN → AmneziaWG → Add tunnel.**
+2. Fill in the form manually, or use the **"Import from an existing .conf file"** block at the top of the form (see [below](#importing-an-existing-conf)).
+3. Required fields:
+   - **Private key** — paste your own, or click "Generate key pair".
+   - **Obfuscation parameters** (`Jc/Jmin/Jmax/S1-S4/H1-H4/I1-I5`) — must **exactly** match the values on the server. `H1-H4` accept either a `min-max` range or a single number.
+   - **Peers** — at least one peer with a required **Endpoint** (the external server's address and port). A peer without an Endpoint cannot be added through this form — that's how the client-only restriction of this package is technically enforced.
+4. Save — the tunnel will appear in the list on the **Tunnels** page.
+5. Click **"Apply changes"** — the `awgN` interface will be created and brought up.
 
-## ⚠️ Обязательные шаги в GUI pfSense (без них трафик не пойдёт)
+## ⚠️ Mandatory pfSense GUI steps (traffic won't pass without them)
 
-Создания и применения туннеля в нашем пакете **недостаточно** для реального прохождения трафика — pfSense требует ручной интеграции интерфейса штатными средствами. Это не баг, а особенность архитектуры pfSense, обязательная для любого VPN-интерфейса:
+Creating and applying the tunnel in our plugin is **not enough** for actual traffic to pass — pfSense requires manual integration of the interface through its own built-in mechanisms. This isn't a bug, it's a mandatory requirement of pfSense's architecture for any VPN-type interface:
 
-1. **Interfaces → Assignments** → добавьте появившийся `awgN` в список.
-2. Откройте созданный интерфейс (например `OPT1`) → задайте понятное имя (например `AWGCLIENT`).
-3. **IPv4 Configuration Type: Static IPv4** → впишите адрес и маску, которые выдал вам сервер (например `10.8.1.31/32`).
-4. **IPv4 Upstream Gateway** → создайте новый gateway на этом же адресе (кнопка **Add a new gateway**).
+1. **Interfaces → Assignments** → add the newly appeared `awgN` to the list.
+2. Open the created interface (e.g. `OPT1`) → give it a friendly name (e.g. `AWGCLIENT`).
+3. **IPv4 Configuration Type: Static IPv4** → enter the address and mask provided by your server (e.g. `10.8.1.31/32`).
+4. **IPv4 Upstream Gateway** → create a new gateway on that same address (the **"Add a new gateway"** button).
 5. Enable interface → Save → Apply.
-6. **⚠️ КРИТИЧНО: Firewall → Rules → AWGCLIENT** → добавьте разрешающее правило (`Allow all from any to any`, аналогично правилу по умолчанию на LAN). **Без этого правила трафик через туннель не пойдёт вообще**, даже если весь остальной policy-routing настроен верно — pfSense блокирует любой трафик, инициированный с нового интерфейса, пока нет явного разрешения. Эта находка стоила нам нескольких часов отладки — не пропускайте этот шаг.
-7. Для **full-tunnel** (`AllowedIPs = 0.0.0.0/0`) — либо сделайте `AWGCLIENT` default gateway, либо настройте policy-routing правило на LAN (Destination → конкретный адрес/подсеть → Gateway = ваш созданный gateway).
-8. **Firewall → NAT → Outbound** — в режиме `automatic` правило трансляции для `AWGCLIENT` создастся само после того, как у интерфейса появится реальный статический адрес (шаг 3).
+6. **⚠️ CRITICAL: Firewall → Rules → AWGCLIENT** → add an allow rule (`Allow all from any to any`, similar to the default LAN rule). **Without this rule, traffic through the tunnel will not pass at all**, even if the rest of your policy routing is configured correctly — pfSense blocks any traffic originating from a new interface until an explicit allow rule exists. This finding cost us several hours of debugging — don't skip this step.
+7. For **full-tunnel** setups (`AllowedIPs = 0.0.0.0/0`), either make `AWGCLIENT` the default gateway, or set up a policy-routing rule on LAN (Destination → specific address/subnet → Gateway = the gateway you created).
+8. **Firewall → NAT → Outbound** — in `automatic` mode, the NAT translation rule for `AWGCLIENT` will be created automatically once the interface has a real static address assigned (step 3).
 
-### Важно про MTU
+### A note on MTU
 
-По умолчанию `interface_configure()` pfSense устанавливает MTU в **1500**, если поле MTU на странице интерфейса `AWGCLIENT` оставлено пустым. Для WireGuard-подобных протоколов рекомендуется MTU **1420** (из-за оверхеда инкапсуляции) — если столкнётесь с проблемами фрагментации/потери крупных пакетов, впишите `1420` явно в поле **MTU** на странице интерфейса **Interfaces → AWGCLIENT** (не в нашей форме — см. Roadmap).
+By default, pfSense's `interface_configure()` sets the MTU to **1500** if the MTU field on the `AWGCLIENT` interface page is left blank. For WireGuard-like protocols, an MTU of **1420** is recommended (to account for encapsulation overhead) — if you run into fragmentation or large-packet-loss issues, enter `1420` explicitly in the **MTU** field on the **Interfaces → AWGCLIENT** page (not in our form — see Roadmap).
 
-## Импорт готового `.conf`
+## Importing an existing `.conf`
 
-На странице **Добавить туннель** есть блок **«Импорт из готового .conf файла»**:
-- **Вставьте** содержимое конфига (тот самый нативный AmneziaWG-формат с `[Interface]`/`[Peer]`) в текстовое поле, либо
-- **Загрузите файл** через кнопку выбора файла — содержимое автоматически подставится в текстовое поле.
+On the **Add tunnel** page, there's an **"Import from an existing .conf file"** block:
+- **Paste** the contents of your config (the native AmneziaWG format with `[Interface]`/`[Peer]` sections) into the text box, or
+- **Upload a file** using the file picker — its contents will be pasted into the text box automatically.
 
-Нажмите **«Разобрать и заполнить форму»** — все поля заполнятся автоматически. Разбор **не сохраняет** туннель — проверьте/поправьте значения и нажмите обычную кнопку **«Сохранить»**.
+Click **"Parse and fill the form"** — all fields will be populated automatically. Parsing **does not save** the tunnel — review/adjust the values and then click the regular **"Save"** button.
 
-## Диагностика и логи
+## Diagnostics and logs
 
 ```sh
-# Статус службы
+# Service status
 service awg status
 
-# Логи PHP-отладки пакета (сейчас всегда включены, см. Roadmap)
+# Plugin's PHP debug logs (currently always on, see Roadmap)
 grep "AmneziaWG DEBUG" /var/log/system.log | tail -50
 
-# Реальный статус туннеля на уровне протокола
+# Real tunnel status at the protocol level
 awg show all
 
-# Хранилище туннелей (JSON, не config.xml)
+# Tunnel storage (JSON, not config.xml)
 cat /usr/local/etc/amnezia/amneziawg/tunnels.json
 
-# Лог конкретного демона
+# A specific daemon's log
 cat /var/run/amneziawg/awgN.log
 ```
 
-## Roadmap / известные ограничения
+## Roadmap / known limitations
 
-Открытые задачи, над которыми продолжается работа:
+Open tasks currently being worked on:
 
-- [x] ~~**Чекбокс включения/выключения отладочного логирования** на странице **VPN → AmneziaWG → Туннели** — сейчас `AWG_DEBUG = true` жёстко закодирован в `awg.inc`, что означает постоянную запись отладочных сообщений в системный лог.~~ *(Реализовано в v1.0.1)*
-- [ ] **Программное применение MTU** — сейчас MTU нужно задавать вручную на странице интерфейса pfSense (см. выше); в планах — автоматическое применение рекомендованного значения `1420` после `interface_configure()`.
-- [ ] **Поле «Адрес туннеля» в форме редактирования** — на данный момент не влияет на реальную конфигурацию (адрес назначается через Interfaces GUI pfSense) и требует решения: либо убрать поле, либо явно пометить как информационное/устаревшее.
-- [ ] Автоматическая интеграция с DNS Resolver pfSense — сейчас DNS из импортированного конфига только логируется, применение вручную через **System → General Setup**.
-- [ ] Тестирование на архитектурах/сборках pfSense, отличных от той, где велась разработка (amd64, FreeBSD 15.1-based build).
+- [x] ~~**A checkbox to toggle debug logging** on the **VPN → AmneziaWG → Tunnels** page — currently `AWG_DEBUG = true` is hardcoded in `awg.inc`, meaning debug messages are always written to the system log.~~ *(Implemented in v1.0.1)*
+- [ ] **Programmatic MTU application** — MTU currently has to be set manually on the pfSense interface page (see above); the plan is to automatically apply the recommended `1420` value after `interface_configure()`.
+- [ ] **The "Tunnel address" field in the edit form** — currently has no effect on the actual configuration (the address is assigned via the pfSense Interfaces GUI) and needs a decision: either remove the field or clearly mark it as informational/legacy.
+- [ ] Automatic integration with the pfSense DNS Resolver — DNS servers from an imported config are currently only logged; applying them is a manual step via **System → General Setup**.
+- [ ] Testing on pfSense architectures/builds other than the one used during development (amd64, FreeBSD 15.1-based build).
 
-Если вы столкнулись с проблемой не из этого списка — пожалуйста, откройте [Issue](../../issues) с описанием, версией pfSense и логами из раздела «Диагностика».
+If you run into an issue not covered here, please open an [Issue](../../issues) with a description, your pfSense version, and logs from the "Diagnostics" section above.
 
-## Лицензия
+## License
 
-MIT — см. [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
 
 ## 🤝 Contributors & Acknowledgments
 
