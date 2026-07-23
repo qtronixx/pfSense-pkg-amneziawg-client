@@ -594,8 +594,12 @@ function awg_up(array $t): array
     $friendly = awg_find_pfsense_interface_name($ifname);
     if ($friendly !== null) {
         if (function_exists('interface_configure')) {
-            interface_configure($friendly, true);
-            awg_debug("interface_configure({$friendly}) вызван для применения адреса/gateway из настроек pfSense.");
+            if (!defined('AWG_BOOT_START')) {
+                interface_configure($friendly, true);
+                awg_debug("interface_configure({$friendly}) вызван для применения адреса/gateway из настроек pfSense.");
+            } else {
+                awg_debug("interface_configure({$friendly}) пропущен при загрузке — будет вызван штатно через rc.bootup позже.");
+            }
         } else {
             log_error("AmneziaWG: функция interface_configure() недоступна - адрес нужно назначить вручную.");
         }

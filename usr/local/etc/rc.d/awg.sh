@@ -29,7 +29,7 @@ awg_start()
         return 1
     fi
     # Запускаем PHP с туннелями
-    ( sleep 10 && ${PHP} -r "require_once('${AWGINC}'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1 ) &
+    ( sleep 10 && ${PHP} -r "define('AWG_BOOT_START', true); require_once('${AWGINC}'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1 ) &
     # Мониторинг: пишем состояние каждые 5 секунд, 36 итераций = 3 минуты
     ( for i in $(seq 1 36); do
         sleep 5
