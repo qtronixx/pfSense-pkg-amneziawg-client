@@ -23,12 +23,14 @@ AWGINC="/usr/local/pkg/awg.inc"
 
 awg_start()
 {
+    echo "$(date): awg_start() invoked" >> /var/log/awg-boot.log
     if [ ! -x /usr/local/bin/amneziawg-go ] || [ ! -x /usr/local/bin/awg ]; then
-        echo "AmneziaWG Client: бинарники не найдены в /usr/local/bin/, служба не запущена."
+        echo "$(date): бинарники не найдены" >> /var/log/awg-boot.log
         return 1
     fi
     echo "Запуск AmneziaWG Client (синхронизация всех туннелей)..."
-    ${PHP} -r "require_once('${AWGINC}'); awg_sync_all();"
+    ${PHP} -r "require_once('${AWGINC}'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1
+    echo "$(date): awg_start() завершён" >> /var/log/awg-boot.log
 }
 
 awg_stop()
