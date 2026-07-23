@@ -23,16 +23,12 @@ AWGINC="/usr/local/pkg/awg.inc"
 
 awg_start()
 {
-    echo "$(date): awg_start() invoked" >> /var/log/awg-boot.log
+    echo "$(date): awg_start() invoked — запуск через custom_php_resync_config_command" >> /var/log/awg-boot.log
     if [ ! -x /usr/local/bin/amneziawg-go ] || [ ! -x /usr/local/bin/awg ]; then
         echo "$(date): бинарники не найдены" >> /var/log/awg-boot.log
         return 1
     fi
-    echo "Запуск AmneziaWG Client..." >> /var/log/awg-boot.log
-    sleep 10
-    echo "$(date): запуск awg_sync_all" >> /var/log/awg-boot.log
-    ${PHP} -r "define('AWG_BOOT_START', true); require_once('${AWGINC}'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1
-    echo "$(date): awg_start() завершён" >> /var/log/awg-boot.log
+    return 0
 }
 
 awg_stop()

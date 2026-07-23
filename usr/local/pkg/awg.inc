@@ -594,17 +594,9 @@ function awg_up(array $t): array
     $friendly = awg_find_pfsense_interface_name($ifname);
     if ($friendly !== null) {
         if (function_exists('interface_configure')) {
-            if (!defined('AWG_BOOT_START')) {
-                interface_configure($friendly, true);
-                awg_debug("interface_configure({$friendly}) вызван для применения адреса/gateway из настроек pfSense.");
-            } else {
-                awg_debug("interface_configure({$friendly}) пропущен при загрузке — будет вызван штатно через rc.bootup позже.");
-            }
-        } else {
-            log_error("AmneziaWG: функция interface_configure() недоступна - адрес нужно назначить вручную.");
+            interface_configure($friendly, true);
+            awg_debug("interface_configure({$friendly}) вызван...");
         }
-    } else {
-        log_error("AmneziaWG: интерфейс {$ifname} ещё не назначен в Interfaces -> Assignments - адрес не будет применён автоматически.");
     }
 
     // Маршруты под AllowedIPs (только split-tunnel, не 0.0.0.0/0 - см. шапку).
@@ -795,6 +787,21 @@ function awg_install(): void
     $ok = write_config('AmneziaWG Client: пакет установлен, меню зарегистрировано.');
     if ($ok === false) {
         log_error('AmneziaWG Client: КРИТИЧНО - не удалось записать config.xml при установке.');
+    }
+
+    // Регистрируем awg_sync_all в custom_php_resync_config_command —
+    // pfSense вызовет его в rc.bootup ПОСЛЕ настройки интерфейсов
+    $pkg_entry = null;
+    foreach ($installed as $i => $p) {
+        if (($p['name'] ?? '') === $pkg_id) {
+            $pkg_entry = $i;
+            break;
+        }
+    }
+    if ($pkg_entry !== null) {
+        $installed[$pkg_entry]['custom_php_resync_config_command'] = 'awg_sync_all;';
+        awg_config_set_path('installedpackages/package', $installed);
+        write_config('AmneziaWG Client: resync hook зарегистрирован.');
     }
 
     $missing = [];
