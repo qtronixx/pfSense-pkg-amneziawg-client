@@ -133,3 +133,10 @@ If you run into an issue not covered here, please open an [Issue](../../issues) 
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## 🤝 Contributors & Acknowledgments
+
+* **[Dmitry](https://github.com/qtronixx)** — Lead Developer & Project Maintainer
+* ![Claude](https://img.shields.io/badge/Anthropic%20Claude-D97757?style=flat-square&logo=claude&logoColor=white) — Core code development & implementation
+* ![DeepSeek](https://img.shields.io/badge/DeepSeek-4D6BFE?style=flat-square&logo=deepseek&logoColor=white) — Code review & deep analysis
+* ![Gemini](https://img.shields.io/badge/Google%20Gemini-8E75B2?style=flat-square&logo=googlegemini&logoColor=white) — Architecture, workflow logic & debugging
