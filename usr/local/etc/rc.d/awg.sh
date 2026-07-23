@@ -28,17 +28,17 @@ awg_start()
         echo "$(date): бинарники не найдены" >> /var/log/awg-boot.log
         return 1
     fi
-    echo "Запуск AmneziaWG Client (синхронизация всех туннелей)..."
 
-    nohup sh -c "
-        echo \"\$(date): фоновая фаза 1 старт\" >> /var/log/awg-boot.log
-        sleep 10
-        echo \"\$(date): запуск awg_sync_all\" >> /var/log/awg-boot.log
-        ${PHP} -r \"define('AWG_BOOT_START', true); require_once('${AWGINC}'); awg_sync_all();\" >> /var/log/awg-boot.log 2>&1
-        echo \"\$(date): awg_sync_all завершён\" >> /var/log/awg-boot.log
-    " >> /var/log/awg-boot.log 2>&1 &
+    cat > /tmp/awg-boot.sh << 'SCRIPT'
+#!/bin/sh
+echo "$(date): запуск awg_sync_all" >> /var/log/awg-boot.log
+/usr/local/bin/php -r "define('AWG_BOOT_START', true); require_once('/usr/local/pkg/awg.inc'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1
+echo "$(date): awg_sync_all завершён" >> /var/log/awg-boot.log
+SCRIPT
+    chmod +x /tmp/awg-boot.sh
 
-    echo "$(date): awg_start() завершён (фоновая задача запущена)" >> /var/log/awg-boot.log
+    nohup sh -c "sleep 10 && /tmp/awg-boot.sh" >> /var/log/awg-boot.log 2>&1 &
+    echo "$(date): awg_start() завершён" >> /var/log/awg-boot.log
 }
 
 awg_stop()
