@@ -30,12 +30,13 @@ $pgtitle = [gettext('VPN'), gettext('AmneziaWG'), gettext('Редактиров�
 function awg_next_free_name(): string
 {
     $used = array_column(awg_get_tunnels(), 'name');
-    for ($i = 0; $i < 100; $i++) {
-        if (!in_array(AWG_IF_PREFIX . $i, $used, true)) {
-            return AWG_IF_PREFIX . $i;
+    for ($i = 0; $i < 1000; $i++) {
+        $candidate = 'tun9' . str_pad((string)$i, 3, '0', STR_PAD_LEFT);
+        if (!in_array($candidate, $used, true)) {
+            return $candidate;
         }
     }
-    return AWG_IF_PREFIX . '0';
+    return 'tun9000';
 }
 
 $tunnels = awg_get_tunnels();
@@ -273,9 +274,9 @@ include('head.inc');
         <div class="form-group">
             <label class="col-sm-2 control-label"><?= gettext('Имя интерфейса') ?></label>
             <div class="col-sm-4">
-                <input type="text" class="form-control" name="name" required pattern="awg[0-9]{1,3}"
+                <input type="text" class="form-control" name="name" required pattern="tun9[0-9]{3}"
                        value="<?= htmlspecialchars($pconfig['name']) ?>" <?= $id !== null ? 'readonly' : '' ?>>
-                <span class="help-block"><?= gettext('Формат: awg0, awg1, ...') ?></span>
+                <span class="help-block"><?= gettext('Формат: tun9000, tun9001, ...') ?></span>
             </div>
         </div>
 

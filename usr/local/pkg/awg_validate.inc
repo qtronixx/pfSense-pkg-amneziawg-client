@@ -21,8 +21,8 @@ function awg_validate_tunnel_form(array $pconfig): array
 {
     $input_errors = [];
 
-    if (empty($pconfig['name']) || !preg_match('/^awg[0-9]{1,3}$/', (string)$pconfig['name'])) {
-        $input_errors[] = 'Имя интерфейса должно быть в формате awgN (например, awg0).';
+    if (empty($pconfig['name']) || !preg_match('/^tun9[0-9]{3}$/', (string)$pconfig['name'])) {
+        $input_errors[] = 'Имя интерфейса должно быть в формате tun9NNN (например, tun9000).';
     }
 
     if (empty($pconfig['privkey'])) {

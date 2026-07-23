@@ -41,7 +41,8 @@ require_once('interfaces.inc');
 /* --- Константы --- */
 const AWG_XML_ROOT     = 'installedpackages';
 const AWG_XML_SECTION  = 'awgclient';
-const AWG_IF_PREFIX    = 'awg';
+const AWG_IF_PREFIX    = 'tun';
+const AWG_IF_NUM_BASE = 9000; // отступ, чтобы не пересекаться с обычными tunN
 const AWG_CONF_DIR     = '/usr/local/etc/amnezia/amneziawg/';
 const AWG_BIN          = '/usr/local/bin/awg';
 const AWG_GO_BIN       = '/usr/local/bin/amneziawg-go';
@@ -120,6 +121,60 @@ function awg_config_get_path(string $path, $default = null)
         $ref = $ref[$key];
     }
     return $ref;
+}
+
+/*
+ * Миграция имён интерфейсов awgN -> tunNNNN (найдено критично: pfSense
+ * не пропускает "awgN" через is_interface_mismatch() при загрузке -
+ * имя интерфейса должно совпадать с regex в этой функции, включающим
+ * ^tun/^wg/^ovpn и т.д. Без этого интерфейс считается "физически
+ * отсутствующим" при ребуте, что приводит к экрану Interface Mismatch
+ * и требует ручного переназначения интерфейсов - критично для
+ * headless/удалённых инсталляций.
+ */
+function awg_migrate_interface_names(): void
+{
+    $tunnels = awg_get_tunnels();
+    $changed = false;
+    $used_nums = [];
+
+    foreach ($tunnels as $t) {
+        if (preg_match('/^tun9([0-9]{3})$/', $t['name'] ?? '', $m)) {
+            $used_nums[(int)$m[1]] = true;
+        }
+    }
+
+    foreach ($tunnels as &$t) {
+        if (preg_match('/^awg([0-9]{1,3})$/', $t['name'] ?? '')) {
+            $old_name = $t['name'];
+            $n = 0;
+            while (isset($used_nums[$n])) {
+                $n++;
+            }
+            $new_name = 'tun9' . str_pad((string)$n, 3, '0', STR_PAD_LEFT);
+            $used_nums[$n] = true;
+
+            log_error("AmneziaWG: миграция имени интерфейса {$old_name} -> {$new_name} " .
+                       "(старый формат несовместим с проверкой pfSense при загрузке).");
+
+            // Переносим .conf-файл, если существует
+            $old_conf = AWG_CONF_DIR . $old_name . '.conf';
+            if (file_exists($old_conf)) {
+                @rename($old_conf, AWG_CONF_DIR . $new_name . '.conf');
+            }
+
+            $t['name'] = $new_name;
+            $changed = true;
+        }
+    }
+    unset($t);
+
+    if ($changed) {
+        awg_save_tunnels($tunnels);
+        log_error('AmneziaWG: миграция имён интерфейсов завершена. ' .
+                   'ВАЖНО: перейдите в Interfaces -> Assignments и назначьте новые tunN-интерфейсы заново, ' .
+                   'старые записи awgN нужно удалить вручную из Assignments.');
+    }
 }
 
 function awg_config_set_path(string $path, $value): void
@@ -242,7 +297,7 @@ function awg_genkey(): array
 /* --- Пути, с защитой от path traversal --- */
 function awg_conf_path(string $ifname): string
 {
-    if (!preg_match('/^awg[0-9]{1,3}$/', $ifname)) {
+    if (!preg_match('/^tun9[0-9]{3}$/', $ifname)) {
         throw new InvalidArgumentException("AmneziaWG: недопустимое имя интерфейса '{$ifname}'");
     }
     return AWG_CONF_DIR . $ifname . '.conf';
@@ -621,6 +676,7 @@ function awg_apply_dns(string $ifname, string $dns_csv): void
 
 function awg_sync_all(): void
 {
+    awg_migrate_interface_names();
     foreach (awg_get_tunnels() as $t) {
         if (empty($t['enabled'])) {
             try {
