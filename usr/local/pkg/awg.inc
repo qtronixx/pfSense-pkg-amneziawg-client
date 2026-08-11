@@ -737,6 +737,7 @@ function awg_sync_all(): void
  * awg_install()/awg_deinstall() - самодостаточная регистрация ТОЛЬКО
  * менюшки и записи о пакете (это работает через config.xml надёжно).
  * Туннели сюда не относятся - они в JSON.
+ * регистрируем shellcmd вместо custom_php_resync_config_command
  */
 function awg_install(): void
 {
@@ -784,10 +785,59 @@ function awg_install(): void
         awg_config_set_path('installedpackages/package', $installed);
     }
 
-    $ok = write_config('AmneziaWG Client: пакет установлен, меню зарегистрировано.');
+    /*
+     * ЗАМЕНЕНО (23.07.2026): custom_php_resync_config_command НЕ
+     * вызывается автоматически на каждой загрузке в rc.bootup 2.8.1 -
+     * подтверждено эмпирически (запись в config.xml есть, вызов в
+     * логах отсутствует после нескольких перезагрузок). Причина:
+     * этот хук предназначен для других сценариев (пересинхрон пакетов
+     * из Package Manager), а не для boot-time автозапуска служб.
+     *
+     * НАШЁЛСЯ И КОРНЕВОЙ БАГ ПОДВИСАНИЯ ТУННЕЛЕЙ ПОСЛЕ ЗАГРУЗКИ:
+     * поздний внутренний проход pfSense по интерфейсам (после
+     * отработки rc.d) считает tunN, поднятый нашим демоном "снаружи",
+     * не полностью настроенным штатным образом, и уничтожает его
+     * (ifconfig destroy) - что убивает и сам демон (теряет /dev/tunN).
+     *
+     * Решение: регистрируем нашу команду синхронизации через нативный
+     * <shellcmd> в config.xml - pfSense выполняет эти команды в самом
+     * конце rc.bootup, ПОСЛЕ всех своих внутренних проверок интерфейсов.
+     * Это тот же механизм, на котором исторически строился сторонний
+     * пакет Shellcmd - мы используем сам механизм напрямую, без
+     * зависимости от стороннего пакета.
+     */
+    $shellcmd_entry = '/usr/local/bin/php -r "require_once(\'/usr/local/pkg/awg.inc\'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1';
+    $shellcmds = awg_config_get_path('shellcmd', []);
+    $shellcmd_found = false;
+    foreach ($shellcmds as $sc) {
+        if (($sc['cmd'] ?? '') === $shellcmd_entry) {
+            $shellcmd_found = true;
+            break;
+        }
+    }
+    if (!$shellcmd_found) {
+        $shellcmds[] = ['cmd' => $shellcmd_entry];
+        awg_config_set_path('shellcmd', $shellcmds);
+    }
+
+    $ok = write_config('AmneziaWG Client: пакет установлен, меню и shellcmd-хук зарегистрированы.');
     if ($ok === false) {
         log_error('AmneziaWG Client: КРИТИЧНО - не удалось записать config.xml при установке.');
     }
+
+    $missing = [];
+    if (!file_exists(AWG_GO_BIN) || !is_executable(AWG_GO_BIN)) {
+        $missing[] = AWG_GO_BIN;
+    }
+    if (!file_exists(AWG_BIN) || !is_executable(AWG_BIN)) {
+        $missing[] = AWG_BIN;
+    }
+    if (!empty($missing)) {
+        log_error('AmneziaWG Client: ВНИМАНИЕ - не найдены обязательные бинарники: ' . implode(', ', $missing));
+    } else {
+        log_error('AmneziaWG Client: установка завершена, бинарники найдены, меню зарегистрировано.');
+    }
+}
 
     // Регистрируем awg_sync_all в custom_php_resync_config_command —
     // pfSense вызовет его в rc.bootup ПОСЛЕ настройки интерфейсов
@@ -832,7 +882,16 @@ function awg_deinstall(): void
     $installed = array_values(array_filter($installed, fn($p) => ($p['name'] ?? '') !== 'AmneziaWG-client'));
     awg_config_set_path('installedpackages/package', $installed);
 
-    write_config('AmneziaWG Client: пакет удалён, меню и туннели очищены.');
+    // Убираем shellcmd-запись, иначе она останется в config.xml навсегда
+    // и будет пытаться вызвать awg_sync_all() из уже удалённого awg.inc
+    // при каждой следующей загрузке - это вызовет фатальную PHP-ошибку
+    // на каждом boot до тех пор, пока запись не будет вручную вычищена.
+    $shellcmd_entry = '/usr/local/bin/php -r "require_once(\'/usr/local/pkg/awg.inc\'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1';
+    $shellcmds = awg_config_get_path('shellcmd', []);
+    $shellcmds = array_values(array_filter($shellcmds, fn($sc) => ($sc['cmd'] ?? '') !== $shellcmd_entry));
+    awg_config_set_path('shellcmd', $shellcmds);
+
+    write_config('AmneziaWG Client: пакет удалён, меню, shellcmd-хук и туннели очищены.');
     log_error('AmneziaWG Client: деинсталляция завершена.');
 }
 
