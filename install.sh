@@ -160,6 +160,7 @@ case "${COMMAND}" in
         info "Обновление AmneziaWG Client..."
         service awg stop 2>/dev/null || true
         cmd_deploy_files
+        cmd_register
         service awg restart 2>/dev/null || true
         ok "Обновление завершено"
         ;;
