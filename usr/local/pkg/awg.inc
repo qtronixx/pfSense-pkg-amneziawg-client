@@ -805,18 +805,23 @@ function awg_install(): void
      * Это тот же механизм, на котором исторически строился сторонний
      * пакет Shellcmd - мы используем сам механизм напрямую, без
      * зависимости от стороннего пакета.
+     * -
+     * ИСПРАВЛЕНО: shellcmd должен храниться как ПЛОСКИЙ массив СТРОК
+     * (<shellcmd>команда</shellcmd>), а не как массив ассоциативных
+     * массивов с ключом 'cmd' - именно такую же ошибку когда-то допускал
+     * официальный пакет Shellcmd (задокументированный старый баг:
+     * "Shellcmd package wraps commands in additional <command>-tag,
+     * which is not interpreted in /etc/inc/system.inc"). С вложенной
+     * структурой команда физически попадала в config.xml, но rc.bootup
+     * её никогда не исполнял.
      */
     $shellcmd_entry = '/usr/local/bin/php -r "require_once(\'/usr/local/pkg/awg.inc\'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1';
     $shellcmds = awg_config_get_path('shellcmd', []);
-    $shellcmd_found = false;
-    foreach ($shellcmds as $sc) {
-        if (($sc['cmd'] ?? '') === $shellcmd_entry) {
-            $shellcmd_found = true;
-            break;
-        }
+    if (!is_array($shellcmds)) {
+        $shellcmds = $shellcmds === '' ? [] : [$shellcmds];
     }
-    if (!$shellcmd_found) {
-        $shellcmds[] = ['cmd' => $shellcmd_entry];
+    if (!in_array($shellcmd_entry, $shellcmds, true)) {
+        $shellcmds[] = $shellcmd_entry;
         awg_config_set_path('shellcmd', $shellcmds);
     }
 
@@ -839,34 +844,6 @@ function awg_install(): void
     }
 }
 
-    // Регистрируем awg_sync_all в custom_php_resync_config_command —
-    // pfSense вызовет его в rc.bootup ПОСЛЕ настройки интерфейсов
-    $pkg_entry = null;
-    foreach ($installed as $i => $p) {
-        if (($p['name'] ?? '') === $pkg_id) {
-            $pkg_entry = $i;
-            break;
-        }
-    }
-    if ($pkg_entry !== null) {
-        $installed[$pkg_entry]['custom_php_resync_config_command'] = 'awg_sync_all;';
-        awg_config_set_path('installedpackages/package', $installed);
-        write_config('AmneziaWG Client: resync hook зарегистрирован.');
-    }
-
-    $missing = [];
-    if (!file_exists(AWG_GO_BIN) || !is_executable(AWG_GO_BIN)) {
-        $missing[] = AWG_GO_BIN;
-    }
-    if (!file_exists(AWG_BIN) || !is_executable(AWG_BIN)) {
-        $missing[] = AWG_BIN;
-    }
-    if (!empty($missing)) {
-        log_error('AmneziaWG Client: ВНИМАНИЕ - не найдены обязательные бинарники: ' . implode(', ', $missing));
-    } else {
-        log_error('AmneziaWG Client: установка завершена, бинарники найдены, меню зарегистрировано.');
-    }
-}
 
 function awg_deinstall(): void
 {
@@ -888,7 +865,10 @@ function awg_deinstall(): void
     // на каждом boot до тех пор, пока запись не будет вручную вычищена.
     $shellcmd_entry = '/usr/local/bin/php -r "require_once(\'/usr/local/pkg/awg.inc\'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1';
     $shellcmds = awg_config_get_path('shellcmd', []);
-    $shellcmds = array_values(array_filter($shellcmds, fn($sc) => ($sc['cmd'] ?? '') !== $shellcmd_entry));
+    if (!is_array($shellcmds)) {
+        $shellcmds = $shellcmds === '' ? [] : [$shellcmds];
+    }
+    $shellcmds = array_values(array_filter($shellcmds, fn($cmd) => $cmd !== $shellcmd_entry));
     awg_config_set_path('shellcmd', $shellcmds);
 
     write_config('AmneziaWG Client: пакет удалён, меню, shellcmd-хук и туннели очищены.');
