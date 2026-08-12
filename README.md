@@ -7,6 +7,8 @@ A client-side **AmneziaWG** plugin (a WireGuard fork with protocol obfuscation f
 
 > ⚠️ **Status: working prototype, under active testing.** Core functionality (tunnel creation, obfuscation, real traffic through the VPN) has been confirmed by hands-on testing, including a full "clean-slate" install run. Known limitations and open tasks are listed in the [Roadmap](#roadmap--known-limitations) section below.
 
+> ✅ **v1.1.0: critical reboot-related bug fixed.** Prior to this version, tunnels did not survive a system reboot. See the [History of critical findings](#history-of-critical-findings) section for details.
+
 ---
 
 ## Contents
