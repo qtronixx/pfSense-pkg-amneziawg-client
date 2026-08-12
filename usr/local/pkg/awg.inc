@@ -816,13 +816,13 @@ function awg_install(): void
      * её никогда не исполнял.
      */
     $shellcmd_entry = '/usr/local/bin/php -r "require_once(\'/usr/local/pkg/awg.inc\'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1';
-    $shellcmds = awg_config_get_path('shellcmd', []);
+    $shellcmds = awg_config_get_path('system/shellcmd', []);
     if (!is_array($shellcmds)) {
         $shellcmds = $shellcmds === '' ? [] : [$shellcmds];
     }
     if (!in_array($shellcmd_entry, $shellcmds, true)) {
         $shellcmds[] = $shellcmd_entry;
-        awg_config_set_path('shellcmd', $shellcmds);
+        awg_config_set_path('system/shellcmd', $shellcmds);
     }
 
     $ok = write_config('AmneziaWG Client: пакет установлен, меню и shellcmd-хук зарегистрированы.');
@@ -864,12 +864,12 @@ function awg_deinstall(): void
     // при каждой следующей загрузке - это вызовет фатальную PHP-ошибку
     // на каждом boot до тех пор, пока запись не будет вручную вычищена.
     $shellcmd_entry = '/usr/local/bin/php -r "require_once(\'/usr/local/pkg/awg.inc\'); awg_sync_all();" >> /var/log/awg-boot.log 2>&1';
-    $shellcmds = awg_config_get_path('shellcmd', []);
+    $shellcmds = awg_config_get_path('system/shellcmd', []);
     if (!is_array($shellcmds)) {
         $shellcmds = $shellcmds === '' ? [] : [$shellcmds];
     }
     $shellcmds = array_values(array_filter($shellcmds, fn($cmd) => $cmd !== $shellcmd_entry));
-    awg_config_set_path('shellcmd', $shellcmds);
+    awg_config_set_path('system/shellcmd', $shellcmds);
 
     write_config('AmneziaWG Client: пакет удалён, меню, shellcmd-хук и туннели очищены.');
     log_error('AmneziaWG Client: деинсталляция завершена.');
