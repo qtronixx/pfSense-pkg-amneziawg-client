@@ -146,11 +146,37 @@ cmd_remove_files() {
     ok "Файлы удалены"
 }
 
+cmd_sync_tunnels() {
+    info "Синхронизация туннелей..."
+
+    STUB_DIR="/tmp/awg-inc-stub-$$"
+    mkdir -p "${STUB_DIR}"
+    printf '<?php\n' > "${STUB_DIR}/services_dhcp.inc"
+
+    PHP_SCRIPT="/tmp/awg-sync-$$.php"
+    cat > "${PHP_SCRIPT}" << 'PHPEOF'
+<?php
+set_include_path('/etc/inc' . PATH_SEPARATOR . '/usr/local/share/pear' . PATH_SEPARATOR . ini_get('include_path'));
+require_once('globals.inc');
+require_once('config.inc');
+require_once('/usr/local/pkg/awg.inc');
+awg_sync_all();
+echo "done" . PHP_EOL;
+PHPEOF
+
+    php -d "include_path=${STUB_DIR}:/etc/inc:/usr/local/share/pear" "${PHP_SCRIPT}" || true
+    rm -f "${PHP_SCRIPT}"
+    rm -rf "${STUB_DIR}"
+
+    ok "Туннели синхронизированы"
+}
+
 case "${COMMAND}" in
     install)
         info "Установка AmneziaWG Client..."
         cmd_deploy_files
         cmd_register
+        cmd_sync_tunnels
         echo ""
         info "Установка завершена!"
         echo "  1. Бинарники amneziawg-go/awg уже установлены из bin/ репозитория"
@@ -161,7 +187,7 @@ case "${COMMAND}" in
         service awg stop 2>/dev/null || true
         cmd_deploy_files
         cmd_register
-        service awg restart 2>/dev/null || true
+        cmd_sync_tunnels
         ok "Обновление завершено"
         ;;
     uninstall)
