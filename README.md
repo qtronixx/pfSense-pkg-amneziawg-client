@@ -92,7 +92,7 @@ Creating and applying the tunnel in our plugin is **not enough** for actual traf
 
 ### A note on MTU
 
-By default, pfSense's `interface_configure()` sets the MTU to **1500** if the MTU field on the `AWGCLIENT` interface page is left blank. For WireGuard-like protocols, an MTU of **1420** is recommended (to account for encapsulation overhead) — if you run into fragmentation or large-packet-loss issues, enter `1420` explicitly in the **MTU** field on the **Interfaces → AWGCLIENT** page (not in our form — see Roadmap).
+By default, pfSense's `interface_configure()` sets the MTU for the AWGCLIENT interface to **1500** if the corresponding field is left blank. For the AmneziaWG protocol to function correctly (accounting for encapsulation and traffic obfuscation overhead), the optimal MTU value is **1376**. If you encounter issues with packet fragmentation or connection "hanging," manually set the value to `1376` in the **MTU** field on the **Interfaces → AWGCLIENT** page (please note: this setting is configured in the system interface, not in the plugin form—see the Roadmap).
 
 > 💡 **Important Note for Multiple AmneziaWG Connections**
 > 
