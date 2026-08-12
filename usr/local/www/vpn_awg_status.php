@@ -127,6 +127,13 @@ function awg_format_bytes(int $bytes): string
 $status = awg_get_status();
 $tunnels_cfg = array_column(awg_get_tunnels(), null, 'name');
 
+// ИСПРАВЛЕНО: awg show all опрашивает ВСЕ WireGuard-совместимые
+// интерфейсы в системе (включая штатный пакет WireGuard pfSense,
+// если он установлен) - наш awg-бинарь понимает общий UAPI-протокол
+// и не различает "свои" и "чужие" интерфейсы. Показываем только те,
+// что реально управляются нашим пакетом (есть в tunnels.json).
+$status = array_intersect_key($status, $tunnels_cfg);
+
 include('head.inc');
 ?>
 <body>
