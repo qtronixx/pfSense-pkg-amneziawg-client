@@ -372,7 +372,11 @@ include('head.inc');
                 <input type="number" class="form-control" name="jmax" placeholder="Jmax" value="<?= htmlspecialchars((string)($pconfig['jmax'] ?? '')) ?>">
             </div>
         </div>
-
+        <div class="alert alert-info small">
+            <?= gettext('Рекомендованный MTU для этого туннеля: примерно ') ?>
+            <strong><?= 1420 - ((int)($pconfig['s1'] ?? 0) + (int)($pconfig['s2'] ?? 0) + (int)($pconfig['s3'] ?? 0) + (int)($pconfig['s4'] ?? 0)) ?></strong>
+            <?= gettext('. Задайте это значение вручную на странице Interfaces -> [ваш интерфейс] -> MTU.') ?>
+        </div>
         <div class="form-group">
             <label class="col-sm-2 control-label">S1 / S2 / S3 / S4</label>
             <div class="col-sm-2">

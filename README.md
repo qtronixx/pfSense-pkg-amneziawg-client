@@ -7,6 +7,8 @@ A client-side **AmneziaWG** plugin (a WireGuard fork with protocol obfuscation f
 
 > ⚠️ **Status: working prototype, under active testing.** Core functionality (tunnel creation, obfuscation, real traffic through the VPN) has been confirmed by hands-on testing, including a full "clean-slate" install run. Known limitations and open tasks are listed in the [Roadmap](#roadmap--known-limitations) section below.
 
+> ✅ **v1.1.0: critical reboot-related bug fixed.** Prior to this version, tunnels did not survive a system reboot. See the [History of critical findings](#history-of-critical-findings) section for details.
+
 ---
 
 ## Contents
@@ -19,6 +21,7 @@ A client-side **AmneziaWG** plugin (a WireGuard fork with protocol obfuscation f
 - [⚠️ Mandatory pfSense GUI steps](#️-mandatory-pfsense-gui-steps-traffic-wont-pass-without-them)
 - [Importing an existing .conf](#importing-an-existing-conf)
 - [Diagnostics and logs](#diagnostics-and-logs)
+- [History of critical findings](#history-of-critical-findings)
 - [Roadmap / known limitations](#roadmap--known-limitations)
 - [License](#license)
 
@@ -89,7 +92,7 @@ Creating and applying the tunnel in our plugin is **not enough** for actual traf
 
 ### A note on MTU
 
-By default, pfSense's `interface_configure()` sets the MTU to **1500** if the MTU field on the `AWGCLIENT` interface page is left blank. For WireGuard-like protocols, an MTU of **1420** is recommended (to account for encapsulation overhead) — if you run into fragmentation or large-packet-loss issues, enter `1420` explicitly in the **MTU** field on the **Interfaces → AWGCLIENT** page (not in our form — see Roadmap).
+By default, pfSense's `interface_configure()` sets the MTU for the AWGCLIENT interface to **1500** if the corresponding field is left blank. For the AmneziaWG protocol to function correctly (accounting for encapsulation and traffic obfuscation overhead), the optimal MTU value is **1376**. If you encounter issues with packet fragmentation or connection "hanging," manually set the value to `1376` in the **MTU** field on the **Interfaces → AWGCLIENT** page (please note: this setting is configured in the system interface, not in the plugin form—see the Roadmap).
 
 > 💡 **Important Note for Multiple AmneziaWG Connections**
 > 
@@ -132,6 +135,18 @@ cat /usr/local/etc/amnezia/amneziawg/tunnels.json
 # A specific daemon's log
 cat /var/run/amneziawg/awgN.log
 ```
+
+## History of critical findings
+
+This project was challenging; we had to overcome several architectural hurdles through hands-on testing rather than relying on documentation (which simply doesn't exist for many of these cases). Here is a brief summary for those following a similar path:
+
+1. **Netgate does not publish pfSense kernel source code for the 2.8.x branches.** Consequently, building the AmneziaWG kernel module is impossible, leading to a fully userspace-based architecture (`amneziawg-go`).
+2. **`write_config()` fails to serialize deeply nested structures containing arbitrary packages** in this pfSense build—whether via `config_set_path()` or direct assignment to `$GLOBALS['config']`. The solution was to use a separate JSON file to store tunnel configurations.
+3. **Dual management of the interface address breaks NAT/gateway functionality.** Assigning an address directly via `ifconfig` (bypassing pfSense) conflicted with the Static IPv4 settings in the Interfaces GUI. The solution was to rely exclusively on `interface_configure()`.
+4. **Interface names like `awgN` were not recognized as virtual** by the `is_interface_mismatch()` function (which uses the regex `^tun|^wg|^ovpn|...` in `/etc/inc/util.inc`); pfSense treated them as physically missing during boot. The solution was to rename them to `tun9NNN`.
+5. **The `-f` flag in `daemon(8)` does not mean "fork"; it means "redirect child process output to `/dev/null`"** (see `man daemon`). We spent years losing actual daemon logs and error messages due to a misunderstanding of the flag's semantics. 6. **`custom_php_resync_config_command` is not called automatically during a standard boot** — this hook is intended for other scenarios (such as re-syncing from the Package Manager).
+7. **pfSense’s late internal interface processing was tearing down tunnels established via `rc.d`**, deeming them not fully configured according to standard procedures. The solution was to move the startup process to a native `<shellcmd>` executed at the very end of the boot sequence.
+8. **`<shellcmd>` must be located at the `system/shellcmd` path within `config.xml`, not at the root.** The `system_do_shell_commands()` function in `system.inc` reads `config_get_path("system/shellcmd", '')`; an entry placed in the wrong part of the XML tree is silently ignored without triggering any error.
 
 ## Roadmap / known limitations
 
