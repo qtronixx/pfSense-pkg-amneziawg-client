@@ -2,14 +2,15 @@
 /*
  * vpn_awg_status.php
  * -----------------------------------------------------------------------
- * Страница статуса: парсит вывод `awg show all dump` (машиночитаемый
- * формат, аналогичный `wg show all dump`) и рисует аккуратную таблицу
- * по каждому туннелю/пиру - handshake, трафик, endpoint.
- *
- * Формат dump-строки для интерфейса:
- *   ifname  privkey  pubkey  listenport  fwmark
- * Формат dump-строки для peer:
- *   ifname  pubkey  psk  endpoint  allowedips  latest-handshake  rx  tx  keepalive
+ * ИСПРАВЛЕНИЯ:
+ *   - Фильтрация только "своих" туннелей - awg show all опрашивает
+ *     ВСЕ WireGuard-совместимые интерфейсы в системе, включая штатный
+ *     пакет WireGuard pfSense, если он установлен.
+ *   - Визуальный разделитель между блоками туннелей.
+ *   - Отображение "дружественного" имени интерфейса pfSense (Interfaces
+ *     -> Description) рядом с системным именем tun9NNN.
+ *   - Автообновление страницы с переключаемым чекбоксом.
+ *   - Отображение MTU интерфейса.
  * -----------------------------------------------------------------------
  */
 
@@ -20,16 +21,6 @@ require_once('/usr/local/pkg/awg.inc');
 
 $pgtitle = [gettext('VPN'), gettext('AmneziaWG'), gettext('Статус')];
 
-/*
- * Выполняет `awg show all dump` и разбирает вывод.
- *
- * ИСПРАВЛЕНО (подтверждено реальным выводом 15.07.2026): формат dump
- * для AmneziaWG отличается от ванильного WireGuard - у строки
- * интерфейса 21 поле (privkey, pubkey, listenport, jc, jmin, jmax,
- * s1-s4, h1-h4, i1-i5, advanced-security-flag), поля fwmark НЕТ
- * ВООБЩЕ (в отличие от wg, где оно есть). Строка peer - ровно 9 полей.
- * Различаем по точному количеству колонок, а не диапазону "больше/меньше".
- */
 function awg_get_status(): array
 {
     $out = [];
@@ -46,16 +37,12 @@ function awg_get_status(): array
             $result[$ifname] = ['interface' => [], 'peers' => []];
         }
 
-        // Заменяем строковый "(null)" (буквально выводится awg для
-        // незаполненных I2-I5) на пустую строку - иначе на экране
-        // будет мусорный текст "(null)" вместо прочерка.
         $nn = fn(string $v): string => ($v === '(null)') ? '' : $v;
 
         if (count($cols) === 9) {
-            // --- Peer ---
             $result[$ifname]['peers'][] = [
                 'pubkey'      => $cols[1],
-                'psk'         => $cols[2],
+                'psk'         => $nn($cols[2]),
                 'endpoint'    => $cols[3],
                 'allowedips'  => $cols[4],
                 'handshake'   => (int)$cols[5],
@@ -64,7 +51,6 @@ function awg_get_status(): array
                 'keepalive'   => $cols[8] ?? '',
             ];
         } elseif (count($cols) >= 20) {
-            // --- Интерфейс (AmneziaWG-формат, полный набор обфускации) ---
             $result[$ifname]['interface'] = [
                 'privkey'     => $cols[1]  ?? '',
                 'pubkey'      => $cols[2]  ?? '',
@@ -86,17 +72,11 @@ function awg_get_status(): array
                 'i4'          => $nn($cols[18] ?? ''),
                 'i5'          => $nn($cols[19] ?? ''),
             ];
-        } else {
-            // Неизвестный формат строки - логируем, но не падаем,
-            // чтобы будущие изменения формата dump не роняли страницу статуса.
-            log_error("AmneziaWG: неожиданный формат строки dump ({$ifname}, " . count($cols) . " полей) - пропущена.");
         }
     }
     return $result;
 }
-/*
- * Человекочитаемое "N секунд/минут/часов назад" для времени handshake.
- */
+
 function awg_format_handshake(int $ts): string
 {
     if ($ts === 0) {
@@ -124,15 +104,29 @@ function awg_format_bytes(int $bytes): string
     return sprintf('%.2f %s', $val, $units[$i]);
 }
 
+/*
+ * Возвращает "Имя интерфейса pfSense (Description)" для отображения
+ * рядом с системным tun9NNN - например "AWGCLIENT" вместо голого opt1.
+ */
+function awg_display_name(string $ifname): string
+{
+    $friendly = awg_find_pfsense_interface_name($ifname);
+    if ($friendly === null) {
+        return '';
+    }
+    $descr = awg_config_get_path("interfaces/{$friendly}/descr", '');
+    return $descr !== '' ? $descr : strtoupper($friendly);
+}
+
 $status = awg_get_status();
 $tunnels_cfg = array_column(awg_get_tunnels(), null, 'name');
 
-// ИСПРАВЛЕНО: awg show all опрашивает ВСЕ WireGuard-совместимые
-// интерфейсы в системе (включая штатный пакет WireGuard pfSense,
-// если он установлен) - наш awg-бинарь понимает общий UAPI-протокол
-// и не различает "свои" и "чужие" интерфейсы. Показываем только те,
-// что реально управляются нашим пакетом (есть в tunnels.json).
+// Показываем только интерфейсы, реально управляемые этим пакетом -
+// awg show all видит ВСЕ WireGuard-совместимые интерфейсы в системе,
+// включая штатный пакет WireGuard pfSense, если он установлен.
 $status = array_intersect_key($status, $tunnels_cfg);
+
+$auto_refresh = isset($_GET['autorefresh']) && $_GET['autorefresh'] === '1';
 
 include('head.inc');
 ?>
@@ -145,9 +139,15 @@ include('head.inc');
     </div>
     <div class="panel-body">
 
-        <a href="vpn_awg_status.php" class="btn btn-default btn-sm pull-right">
-            <i class="fa-solid fa-rotate icon-embed-btn"></i><?= gettext('Обновить') ?>
-        </a>
+        <div class="form-group">
+            <label class="checkbox-inline">
+                <input type="checkbox" id="autorefresh-toggle" <?= $auto_refresh ? 'checked' : '' ?>>
+                <?= gettext('Автообновление каждые 15 секунд') ?>
+            </label>
+            <a href="vpn_awg_status.php<?= $auto_refresh ? '?autorefresh=1' : '' ?>" class="btn btn-default btn-sm pull-right">
+                <i class="fa-solid fa-rotate icon-embed-btn"></i><?= gettext('Обновить сейчас') ?>
+            </a>
+        </div>
 
         <?php if (empty($status)): ?>
             <div class="alert alert-warning">
@@ -157,9 +157,24 @@ include('head.inc');
 
         <?php foreach ($status as $ifname => $data):
             $descr = $tunnels_cfg[$ifname]['descr'] ?? '';
+            $friendly_name = awg_display_name($ifname);
+            $mtu_line = [];
+            exec('/sbin/ifconfig ' . escapeshellarg($ifname), $mtu_line);
+            $mtu = '';
+            foreach ($mtu_line as $l) {
+                if (preg_match('/mtu\s+(\d+)/', $l, $m)) {
+                    $mtu = $m[1];
+                    break;
+                }
+            }
         ?>
-        <h3>
+        <div class="panel panel-default" style="border-left: 4px solid #337ab7; margin-top: 15px;">
+        <div class="panel-body">
+        <h3 style="margin-top:0;">
             <?= htmlspecialchars($ifname) ?>
+            <?php if ($friendly_name !== ''): ?>
+                <small class="text-muted">(<?= htmlspecialchars($friendly_name) ?>)</small>
+            <?php endif; ?>
             <?php if ($descr): ?><small><?= htmlspecialchars($descr) ?></small><?php endif; ?>
             <span class="label label-success"><?= gettext('активен') ?></span>
         </h3>
@@ -171,6 +186,10 @@ include('head.inc');
             <tr>
                 <th><?= gettext('Порт прослушивания') ?></th>
                 <td><?= htmlspecialchars($data['interface']['listenport'] ?? '') ?></td>
+            </tr>
+            <tr>
+                <th><?= gettext('MTU') ?></th>
+                <td><?= htmlspecialchars($mtu) ?></td>
             </tr>
             <tr>
                 <th><?= gettext('Jc / Jmin / Jmax') ?></th>
@@ -224,9 +243,32 @@ include('head.inc');
                 <?php endforeach; ?>
             </tbody>
         </table>
+        </div>
+        </div>
         <?php endforeach; ?>
 
     </div>
 </div>
+
+<script>
+(function () {
+    var checkbox = document.getElementById('autorefresh-toggle');
+    var params = new URLSearchParams(window.location.search);
+
+    checkbox.addEventListener('change', function () {
+        if (checkbox.checked) {
+            window.location.href = 'vpn_awg_status.php?autorefresh=1';
+        } else {
+            window.location.href = 'vpn_awg_status.php';
+        }
+    });
+
+    if (params.get('autorefresh') === '1') {
+        setTimeout(function () {
+            window.location.href = 'vpn_awg_status.php?autorefresh=1';
+        }, 15000);
+    }
+})();
+</script>
 
 <?php include('foot.inc'); ?>
