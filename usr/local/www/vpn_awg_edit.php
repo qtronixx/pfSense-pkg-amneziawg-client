@@ -334,14 +334,6 @@ include('head.inc');
         </div>
 
         <div class="form-group">
-            <label class="col-sm-2 control-label"><?= gettext('MTU') ?></label>
-            <div class="col-sm-3">
-                <input type="number" class="form-control" name="mtu" min="576" max="9000"
-                       value="<?= htmlspecialchars($pconfig['mtu']) ?>">
-            </div>
-        </div>
-
-        <div class="form-group">
             <label class="col-sm-2 control-label"><?= gettext('DNS-серверы (через запятую)') ?></label>
             <div class="col-sm-6">
                 <input type="text" class="form-control" name="dns" placeholder="172.29.172.254, 1.0.0.1"
@@ -374,7 +366,7 @@ include('head.inc');
         </div>
         <div class="alert alert-info small">
             <?= gettext('Рекомендованный MTU для этого туннеля: примерно ') ?>
-            <strong><?= 1420 - ((int)($pconfig['s1'] ?? 0) + (int)($pconfig['s2'] ?? 0) + (int)($pconfig['s3'] ?? 0) + (int)($pconfig['s4'] ?? 0)) ?></strong>
+            <strong><?= 1420 - (int)($pconfig['s4'] ?? 0) ?></strong>
             <?= gettext('. Задайте это значение вручную на странице Interfaces -> [ваш интерфейс] -> MTU.') ?>
         </div>
         <div class="form-group">
