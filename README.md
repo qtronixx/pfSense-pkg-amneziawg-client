@@ -153,7 +153,7 @@ This project was challenging; we had to overcome several architectural hurdles t
 Open tasks currently being worked on:
 
 - [x] ~~**A checkbox to toggle debug logging** on the **VPN → AmneziaWG → Tunnels** page — currently `AWG_DEBUG = true` is hardcoded in `awg.inc`, meaning debug messages are always written to the system log.~~ *(Implemented in v1.0.1)*
-- [ ] **Programmatic MTU application** — MTU currently has to be set manually on the pfSense interface page (see above); the plan is to automatically apply the recommended `1420` value after `interface_configure()`.
+- [x]  ~~**Programmatic MTU application** — MTU currently has to be set manually on the pfSense interface page (see above); the plan is to automatically apply the recommended `1420` value after `interface_configure()`. ~~ — it was decided not to partially automate tasks that already require manual interface configuration within the pfSense GUI.
 - [ ] **The "Tunnel address" field in the edit form** — currently has no effect on the actual configuration (the address is assigned via the pfSense Interfaces GUI) and needs a decision: either remove the field or clearly mark it as informational/legacy.
 - [ ] Automatic integration with the pfSense DNS Resolver — DNS servers from an imported config are currently only logged; applying them is a manual step via **System → General Setup**.
 - [ ] Testing on pfSense architectures/builds other than the one used during development (amd64, FreeBSD 15.1-based build).
