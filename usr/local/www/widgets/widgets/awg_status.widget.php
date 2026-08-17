@@ -27,14 +27,16 @@ $awg_widget_tunnels = awg_get_tunnels();
                 <tr><td colspan="2" class="text-muted"><?= gettext('Туннели не настроены') ?></td></tr>
             <?php endif; ?>
             <?php foreach ($awg_widget_tunnels as $t):
-                $up = does_interface_exist($t['name']);
+                $conn_state = awg_connection_state($t['name']);
             ?>
             <tr>
                 <td><?= htmlspecialchars($t['name']) ?> <small class="text-muted"><?= htmlspecialchars($t['descr'] ?? '') ?></small></td>
                 <td>
-                    <?php if (!empty($t['enabled']) && $up): ?>
+                    <?php if ($conn_state === 'connected'): ?>
                         <span class="label label-success"><?= gettext('подключен') ?></span>
-                    <?php elseif (!empty($t['enabled']) && !$up): ?>
+                    <?php elseif ($conn_state === 'connecting'): ?>
+                        <span class="label label-warning"><?= gettext('устанавливается...') ?></span>
+                    <?php elseif (!empty($t['enabled'])): ?>
                         <span class="label label-danger"><?= gettext('ошибка') ?></span>
                     <?php else: ?>
                         <span class="label label-default"><?= gettext('выключен') ?></span>

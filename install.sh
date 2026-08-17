@@ -72,9 +72,13 @@ cmd_deploy_files() {
         echo "  [WARN] bin/amneziawg-go или bin/awg не найдены в репозитории - установите их вручную в /usr/local/bin/"
     fi
 
-    [ -f /usr/local/etc/amnezia/amneziawg/debug.enabled ] || touch /usr/local/etc/amnezia/amneziawg/debug.enabled
-
     ok "Файлы скопированы"
+}
+
+cmd_ensure_debug_default() {
+    # Только для install - выставляем debug включённым по умолчанию,
+    # только если это первая установка (файла нет вообще).
+    [ -f /usr/local/etc/amnezia/amneziawg/debug.enabled ] || touch /usr/local/etc/amnezia/amneziawg/debug.enabled
 }
 
 cmd_register() {
@@ -175,6 +179,7 @@ case "${COMMAND}" in
     install)
         info "Установка AmneziaWG Client..."
         cmd_deploy_files
+        cmd_ensure_debug_default
         cmd_register
         cmd_sync_tunnels
         echo ""

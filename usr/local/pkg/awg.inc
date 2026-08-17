@@ -39,9 +39,8 @@ require_once('util.inc');
 require_once('interfaces.inc');
 
 /* --- Константы --- */
-const AWG_XML_ROOT     = 'installedpackages';
-const AWG_XML_SECTION  = 'awgclient';
-const AWG_IF_PREFIX    = 'tun';
+const AWG_IF_PREFIX    = 'tun9'; // изменено на полный префикс с учётом отступа
+const AWG_IF_NUM_DIGITS = 3;  // число цифр после префикса: tun9000-tun9999
 const AWG_IF_NUM_BASE = 9000; // отступ, чтобы не пересекаться с обычными tunN
 const AWG_CONF_DIR     = '/usr/local/etc/amnezia/amneziawg/';
 const AWG_BIN          = '/usr/local/bin/awg';
@@ -167,12 +166,22 @@ function awg_config_get_path(string $path, $default = null)
  */
 function awg_migrate_interface_names(): void
 {
+    // Миграция идемпотентна по сути, но раньше выполнялась при КАЖДОМ
+    // awg_sync_all() (загрузка, кнопка Apply, cmd_sync_tunnels) - лишнее
+    // чтение tunnels.json и обход массива. Флаг-файл делает её
+    // однократной.
+    $flag = AWG_CONF_DIR . '.migrated_v2';
+    if (file_exists($flag)) {
+        return;
+    }
+
     $tunnels = awg_get_tunnels();
     $changed = false;
     $used_nums = [];
+    $num_pattern = '/^' . preg_quote(AWG_IF_PREFIX, '/') . '([0-9]{' . AWG_IF_NUM_DIGITS . '})$/';
 
     foreach ($tunnels as $t) {
-        if (preg_match('/^tun9([0-9]{3})$/', $t['name'] ?? '', $m)) {
+        if (preg_match($num_pattern, $t['name'] ?? '', $m)) {
             $used_nums[(int)$m[1]] = true;
         }
     }
@@ -184,7 +193,7 @@ function awg_migrate_interface_names(): void
             while (isset($used_nums[$n])) {
                 $n++;
             }
-            $new_name = 'tun9' . str_pad((string)$n, 3, '0', STR_PAD_LEFT);
+            $new_name = AWG_IF_PREFIX . str_pad((string)$n, AWG_IF_NUM_DIGITS, '0', STR_PAD_LEFT);
             $used_nums[$n] = true;
 
             log_error("AmneziaWG: миграция имени интерфейса {$old_name} -> {$new_name} " .
@@ -202,13 +211,15 @@ function awg_migrate_interface_names(): void
     }
     unset($t);
 
-    if ($changed) {
+   if ($changed) {
         awg_save_tunnels($tunnels);
         log_error('AmneziaWG: миграция имён интерфейсов завершена. ' .
                    'ВАЖНО: перейдите в Interfaces -> Assignments и назначьте новые tunN-интерфейсы заново, ' .
                    'старые записи awgN нужно удалить вручную из Assignments.');
     }
+    @touch($flag);
 }
+
 
 function awg_config_set_path(string $path, $value): void
 {
@@ -251,8 +262,9 @@ function awg_get_tunnels(): array
 
 function awg_save_tunnels(array $tunnels): bool
 {
-    if (!is_dir(dirname(AWG_TUNNELS_FILE))) {
-        mkdir(dirname(AWG_TUNNELS_FILE), 0700, true);
+    if (!is_dir(dirname(AWG_TUNNELS_FILE)) && !@mkdir(dirname(AWG_TUNNELS_FILE), 0700, true)) {
+        log_error('AmneziaWG Client: КРИТИЧНО - не удалось создать директорию для tunnels.json.');
+        return false;
     }
 
     if (file_exists(AWG_TUNNELS_FILE)) {
@@ -330,10 +342,21 @@ function awg_genkey(): array
 /* --- Пути, с защитой от path traversal --- */
 function awg_conf_path(string $ifname): string
 {
-    if (!preg_match('/^tun9[0-9]{3}$/', $ifname)) {
+    if (!preg_match('/^' . preg_quote(AWG_IF_PREFIX, '/') . '[0-9]{' . AWG_IF_NUM_DIGITS . '}$/', $ifname)) {
         throw new InvalidArgumentException("AmneziaWG: недопустимое имя интерфейса '{$ifname}'");
     }
     return AWG_CONF_DIR . $ifname . '.conf';
+}
+
+/*
+ * Единая точка формирования regex для имени интерфейса - используется
+ * в awg_conf_path(), awg_migrate_interface_names(), а также должна
+ * использоваться на стороне GUI (awg_validate.inc, vpn_awg_edit.php)
+ * вместо повторного хардкода.
+ */
+function awg_ifname_regex(): string
+{
+    return '/^' . preg_quote(AWG_IF_PREFIX, '/') . '[0-9]{' . AWG_IF_NUM_DIGITS . '}$/';
 }
 
 function awg_pidfile(string $ifname): string
@@ -519,8 +542,9 @@ function awg_write_conf(array $t): bool
         log_error('AmneziaWG: awg_write_conf() вызван без имени интерфейса - отменено.');
         return false;
     }
-    if (!is_dir(AWG_CONF_DIR)) {
-        @mkdir(AWG_CONF_DIR, 0700, true);
+    if (!is_dir(AWG_CONF_DIR) && !@mkdir(AWG_CONF_DIR, 0700, true)) {
+        log_error('AmneziaWG: КРИТИЧНО - не удалось создать директорию ' . AWG_CONF_DIR . '.');
+        return false;
     }
     $path = awg_conf_path($t['name']);
     $ok = (bool) @file_put_contents($path, awg_build_conf($t));
@@ -543,26 +567,28 @@ function awg_up(array $t): array
     $conf   = awg_conf_path($ifname);
 
     awg_down($t, true);
-    awg_write_conf($t);
 
-    if (!is_dir(AWG_RUN_DIR)) {
-        mkdir(AWG_RUN_DIR, 0700, true);
+    if (!awg_write_conf($t)) {
+        return ['ok' => false, 'error' => "Не удалось записать конфиг-файл для {$ifname} - проверьте права/место на диске (см. предыдущую ошибку в логе)."];
+    }
+
+    if (!is_dir(AWG_RUN_DIR) && !@mkdir(AWG_RUN_DIR, 0700, true)) {
+        return ['ok' => false, 'error' => 'Не удалось создать ' . AWG_RUN_DIR . '.'];
     }
 
     $log = AWG_RUN_DIR . $ifname . '.log';
-    $cmd = sprintf(
+
     // ИСПРАВЛЕНО: убран флаг -f - он означает "перенаправить stdio
     // дочернего процесса в /dev/null" (см. man daemon(8)), а НЕ
-    // "форк"/detach (daemon(8) отделяется от управляющего терминала
-    // всегда, без флагов). С -f мы теряли ВСЕ реальные логи и ошибки
-    // amneziawg-go, включая критичные крэши - именно поэтому .log
-    // файлы демона всегда были пустыми на протяжении всей отладки.
-    'daemon -p %s %s %s >> %s 2>&1',
-    escapeshellarg(awg_pidfile($ifname)),
-    escapeshellarg(AWG_GO_BIN),
-    escapeshellarg($ifname),
-    escapeshellarg($log)
-);
+    // "форк"/detach. С -f мы теряли ВСЕ реальные логи и ошибки
+    // amneziawg-go на протяжении всей отладки.
+    $cmd = sprintf(
+        'daemon -p %s %s %s >> %s 2>&1',
+        escapeshellarg(awg_pidfile($ifname)),
+        escapeshellarg(AWG_GO_BIN),
+        escapeshellarg($ifname),
+        escapeshellarg($log)
+    );
     mwexec($cmd, true);
 
     $sock = awg_uapi_sock($ifname);
@@ -741,11 +767,11 @@ function awg_sync_all(): void
  */
 function awg_install(): void
 {
-    if (!is_dir(AWG_CONF_DIR)) {
-        mkdir(AWG_CONF_DIR, 0700, true);
+    if (!is_dir(AWG_CONF_DIR) && !@mkdir(AWG_CONF_DIR, 0700, true)) {
+        log_error('AmneziaWG Client: КРИТИЧНО - не удалось создать ' . AWG_CONF_DIR . '.');
     }
-    if (!is_dir(AWG_RUN_DIR)) {
-        mkdir(AWG_RUN_DIR, 0700, true);
+    if (!is_dir(AWG_RUN_DIR) && !@mkdir(AWG_RUN_DIR, 0700, true)) {
+        log_error('AmneziaWG Client: КРИТИЧНО - не удалось создать ' . AWG_RUN_DIR . '.');
     }
 
     $menu = awg_config_get_path('installedpackages/menu', []);
@@ -963,16 +989,25 @@ function awg_parse_conf(string $text): array
                     break;
                 case 'endpoint':
                     $val_trim = trim($val);
-                    $last_colon = strrpos($val_trim, ':');
-                    if ($last_colon !== false && ctype_digit(substr($val_trim, $last_colon + 1))) {
-                        $current_peer['endpoint']     = substr($val_trim, 0, $last_colon);
-                        $current_peer['endpointport'] = substr($val_trim, $last_colon + 1);
-                    } else {
-                        // Порт не указан явно в Endpoint - оставляем текущий/дефолтный,
-                        // весь Endpoint трактуем как хост (защита от бага: раньше IP
-                        // без порта становился портом).
+                    if (preg_match('/^\[([0-9a-fA-F:]+)\]:(\d+)$/', $val_trim, $em)) {
+                        // IPv6 с явным портом в стандартной нотации [addr]:port
+                        $current_peer['endpoint']     = $em[1];
+                        $current_peer['endpointport'] = $em[2];
+                    } elseif (substr_count($val_trim, ':') > 1) {
+                        // "Голый" IPv6 без порта - более одного двоеточия однозначно
+                        // указывает на IPv6, а не на "хост:порт". Порт НЕ пытаемся
+                        // извлечь, иначе последний октет ошибочно принимается за порт.
                         $current_peer['endpoint']     = $val_trim;
                         $current_peer['endpointport'] = $current_peer['endpointport'] ?: '51820';
+                    } else {
+                        $last_colon = strrpos($val_trim, ':');
+                        if ($last_colon !== false && ctype_digit(substr($val_trim, $last_colon + 1))) {
+                            $current_peer['endpoint']     = substr($val_trim, 0, $last_colon);
+                            $current_peer['endpointport'] = substr($val_trim, $last_colon + 1);
+                        } else {
+                            $current_peer['endpoint']     = $val_trim;
+                            $current_peer['endpointport'] = $current_peer['endpointport'] ?: '51820';
+                        }
                     }
                     break;
                 case 'allowedips':

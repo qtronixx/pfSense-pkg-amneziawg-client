@@ -30,13 +30,14 @@ $pgtitle = [gettext('VPN'), gettext('AmneziaWG'), gettext('Редактиров�
 function awg_next_free_name(): string
 {
     $used = array_column(awg_get_tunnels(), 'name');
-    for ($i = 0; $i < 1000; $i++) {
-        $candidate = 'tun9' . str_pad((string)$i, 3, '0', STR_PAD_LEFT);
+    $max_n = (int) str_repeat('9', AWG_IF_NUM_DIGITS);
+    for ($i = 0; $i <= $max_n; $i++) {
+        $candidate = AWG_IF_PREFIX . str_pad((string)$i, AWG_IF_NUM_DIGITS, '0', STR_PAD_LEFT);
         if (!in_array($candidate, $used, true)) {
             return $candidate;
         }
     }
-    return 'tun9000';
+    return AWG_IF_PREFIX . str_repeat('0', AWG_IF_NUM_DIGITS);
 }
 
 $tunnels = awg_get_tunnels();
@@ -52,7 +53,6 @@ $pconfig = [
     'address'     => '',
     'address6'    => '',
     'listenport'  => '',
-    'mtu'         => '1420',
     'jc'          => '4',
     'jmin'        => '10',
     'jmax'        => '50',
@@ -166,7 +166,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'address'    => $pconfig['address'] ?? '',
                     'address6'   => $pconfig['address6'] ?? '',
                     'listenport' => $pconfig['listenport'] ?? '',
-                    'mtu'        => $pconfig['mtu'] ?? '1420',
                     'jc'         => $pconfig['jc'],
                     'jmin'       => $pconfig['jmin'],
                     'jmax'       => $pconfig['jmax'],

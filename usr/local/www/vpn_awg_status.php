@@ -72,9 +72,31 @@ function awg_get_status(): array
                 'i4'          => $nn($cols[18] ?? ''),
                 'i5'          => $nn($cols[19] ?? ''),
             ];
+        } else {
+            log_error('AmneziaWG: неожиданный формат строки awg show dump (' . count($cols) . ' полей) для ' . awg_log_safe($ifname) . ' - пропущена.');
         }
     }
     return $result;
+}
+
+/*
+ * Один batched-вызов ifconfig вместо N отдельных exec() в цикле по
+ * туннелям - раньше на каждый активный туннель spawn-ился отдельный
+ * /bin/sh -c при каждой загрузке страницы статуса.
+ */
+function awg_get_all_mtu(): array
+{
+    $all_mtu = [];
+    exec('/sbin/ifconfig -a', $ifconfig_all);
+    $cur_if = null;
+    foreach ($ifconfig_all as $l) {
+        if (preg_match('/^(\S+):/', $l, $m)) {
+            $cur_if = $m[1];
+        } elseif ($cur_if !== null && preg_match('/mtu\s+(\d+)/', $l, $m)) {
+            $all_mtu[$cur_if] = $m[1];
+        }
+    }
+    return $all_mtu;
 }
 
 function awg_format_handshake(int $ts): string
@@ -155,18 +177,12 @@ include('head.inc');
             </div>
         <?php endif; ?>
 
-        <?php foreach ($status as $ifname => $data):
+        <?php
+        $all_mtu = awg_get_all_mtu();
+        foreach ($status as $ifname => $data):
             $descr = $tunnels_cfg[$ifname]['descr'] ?? '';
             $friendly_name = awg_display_name($ifname);
-            $mtu_line = [];
-            exec('/sbin/ifconfig ' . escapeshellarg($ifname), $mtu_line);
-            $mtu = '';
-            foreach ($mtu_line as $l) {
-                if (preg_match('/mtu\s+(\d+)/', $l, $m)) {
-                    $mtu = $m[1];
-                    break;
-                }
-            }
+            $mtu = $all_mtu[$ifname] ?? '';
         ?>
         <div class="panel panel-default" style="border-left: 4px solid #337ab7; margin-top: 15px;">
         <div class="panel-body">

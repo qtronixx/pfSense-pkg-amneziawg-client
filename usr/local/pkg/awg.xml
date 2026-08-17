@@ -80,6 +80,5 @@
     -->
     <custom_php_install_command>awg_install</custom_php_install_command>
     <custom_php_deinstall_command>awg_deinstall</custom_php_deinstall_command>
-    <custom_php_resync_config_command>awg_sync_all</custom_php_resync_config_command>
-
+    
 </packagegui>
